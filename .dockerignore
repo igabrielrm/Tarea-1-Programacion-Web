@@ -1,0 +1,35 @@
+# =====================================================================================
+#  .dockerignore - what must NOT be sent to the Docker daemon when building
+#
+#  The "build context" is everything Docker uploads before running the Dockerfile.
+#  Excluding folders that the image does not need makes the build faster and prevents
+#  secrets or compiled artifacts from leaking into the image.
+# =====================================================================================
+
+# Build output: the .jar is compiled INSIDE the image, never copied from the host.
+target/
+
+# Git history and tooling metadata.
+.git/
+.gitignore
+.gitattributes
+
+# IDEs and editor settings.
+.idea/
+.vscode/
+*.iml
+
+# Documentation and private notes (the study guide must never reach an image).
+README.md
+AI_RULES.md
+guia_estudio_personal.md
+opencode.json
+
+# The frontend is served by Live Server, not by this container.
+frontend/
+http/
+
+# Logs and local environment files.
+*.log
+logs/
+.env
