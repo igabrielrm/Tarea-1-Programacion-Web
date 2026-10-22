@@ -3,7 +3,7 @@
 Complete CRUD (GET, POST, PUT, DELETE) over the **Product** entity (`id`, `name`, `description`, `price`),
 organised in layers (Entity → Repository → Service → Controller), with global CORS for a Vanilla JS frontend.
 
-**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven
+**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven · Docker · GitHub Actions
 
 ---
 
@@ -12,7 +12,10 @@ organised in layers (Entity → Repository → Service → Controller), with glo
 ```
 products-api/
 ├── pom.xml                                  Dependencies and the Spring Boot version
-├── docker-compose.yml                       Brings PostgreSQL up without installing it
+├── Dockerfile                               Multi-stage image (build + runtime)
+├── .dockerignore                            What never enters the build context
+├── docker-compose.yml                       PostgreSQL + API as two containers
+├── .github/workflows/ci-cd.yml              GitHub Actions pipeline
 ├── http/products-api.http                   Test requests (IntelliJ / VS Code)
 │
 ├── src/main/java/com/tienda/products/
@@ -44,9 +47,14 @@ products-api/
 ├── src/test/java/com/tienda/products/
 │   ├── service/impl/ProductServiceImplTest.java   9 unit tests (Mockito, no database)
 │   └── controller/ProductControllerTest.java      15 web tests (MockMvc, no server)
-└── frontend-example/                        Demo Vanilla JS frontend
-    ├── index.html
-    └── js/{api.js, app.js}
+│
+└── frontend/                                Demo Vanilla JS frontend (ES modules)
+    ├── index.html                           Structure only, loads src/main.js
+    └── src/
+        ├── api/products.js                  HTTP layer: the only file that calls fetch()
+        ├── ui/productTable.js               View layer: the only file that touches the DOM
+        ├── main.js                          Wiring, state (edit mode) and the debounce
+        └── styles/main.css                  Presentation
 ```
 
 ---
@@ -73,12 +81,12 @@ spring.datasource.username=postgres
 spring.datasource.password=YOUR_REAL_PASSWORD
 ```
 
-**Option B — Docker (if you do not want to touch your installation):**
+**Option B — Docker, database only (API runs locally with Maven):**
 
-Since your local PostgreSQL already takes port 5432, run the container on another port:
+Since your local PostgreSQL already takes port 5432, the container is published on 5433:
 
 ```bash
-POSTGRES_PORT=5433 docker compose up -d
+docker compose up -d postgres
 ```
 
 And in `application.properties`:
@@ -86,6 +94,18 @@ And in `application.properties`:
 ```properties
 spring.datasource.url=jdbc:postgresql://localhost:5433/products_db
 ```
+
+**Option C — Docker, database + API together (nothing installed locally):**
+
+```bash
+docker compose up -d --build
+```
+
+This builds the image from the `Dockerfile` and starts both containers. The API is on
+`http://localhost:8080`, PostgreSQL on `localhost:5433`, and the API receives its
+connection settings as environment variables (`SPRING_DATASOURCE_URL` → host
+`postgres`, the name of the service), so `application.properties` does not need to be
+edited at all. Details in section 10.
 
 > The `products` table **is created automatically** when the API starts
 > (`spring.jpa.hibernate.ddl-auto=update`), together with 3 sample products (`data.sql`).
@@ -104,7 +124,14 @@ Or from IntelliJ IDEA: right click on `ProductsApiApplication` → *Run*.
 
 ### 2.3 Running the frontend
 
-Open `frontend-example/index.html` with the **Live Server** extension of VS Code (port 5500).
+Serve the `frontend/` folder over HTTP — for example with the **Live Server** extension
+of VS Code (port 5500) — and open `http://localhost:5500`.
+
+> ⚠️ **Do not open `frontend/index.html` by double-clicking it.** The page uses ES
+> modules, and browsers refuse to load modules from a `file://` URL (CORS error). It
+> has to be served by a web server. Any static server works:
+> `python -m http.server 5500 --directory frontend`
+
 If you use another port, add it in `application.properties` → `app.cors.allowed-origins`.
 
 ### 2.4 Checking it
@@ -242,7 +269,7 @@ curl -X POST http://localhost:8080/api/products \
 The endpoint uses a derived query: `findByNameContainingIgnoreCaseOrderByNameAsc(term)`, which
 Spring Data turns into `SELECT * FROM products WHERE LOWER(name) LIKE LOWER('%term%') ORDER BY name ASC`.
 
-The frontend applies a **4 second debounce** (see `frontend-example/js/app.js`) so the request is
+The frontend applies a **4 second debounce** (see `frontend/src/main.js`) so the request is
 only sent once the user stops typing.
 
 ### 5.4 Errors
@@ -322,12 +349,17 @@ registry.addMapping("/api/**")
 ## 7. Useful commands
 
 ```bash
-mvn spring-boot:run        # Start the API
-mvn test                   # Run the 24 automated tests
-mvn clean package          # Build target/products-api-1.0.0.jar
+mvn spring-boot:run              # Start the API locally
+mvn test                         # Run the 24 automated tests
+mvn clean package                # Build target/products-api-1.0.0.jar
 java -jar target/products-api-1.0.0.jar
-docker compose up -d       # Start PostgreSQL
-docker compose down        # Stop PostgreSQL (keeping the data)
+
+docker build -t products-api:1.0.0 .    # Build the image only
+docker compose up -d --build     # Start PostgreSQL + the API
+docker compose logs -f api       # Follow the API logs
+docker compose ps                # See container status / healthchecks
+docker compose down              # Stop both (keeping the data)
+docker compose down -v           # Stop both and delete the volume
 ```
 
 ---
@@ -343,6 +375,10 @@ docker compose down        # Stop PostgreSQL (keeping the data)
 - **Global exception handler** so every error leaves as JSON.
 - **Automated tests with Mockito and MockMvc** that need neither a database nor a server.
 - **Debounced search** so typing does not flood the backend with requests.
+- **Modular frontend** (`api` / `ui` / `main`) with ES modules, so no file mixes HTTP,
+  DOM and orchestration.
+- **Multi-stage Dockerfile** and a compose stack with healthchecks.
+- **CI pipeline** that blocks the build when a test fails.
 
 ---
 
@@ -433,3 +469,148 @@ create table products (
     primary key (id)
 );
 ```
+
+### 9.7 The container stack, measured
+
+`docker build` and `docker compose up -d --build` were actually executed:
+
+```
+#12 [build 4/6] RUN mvn -B -q dependency:go-offline          DONE 43.7s
+#16 [build 6/6] RUN mvn -B -q clean package -DskipTests      DONE 12.9s
+#18 exporting to image                                       DONE  5.6s
+
+NAME           STATUS                    PORTS
+products-api   Up 31 seconds (healthy)   0.0.0.0:8080->8080/tcp
+products-db    Up 37 seconds (healthy)   0.0.0.0:5433->5432/tcp
+```
+
+The two healthchecks turned `healthy`, which proves that the API reached PostgreSQL
+through the internal DNS name `postgres` and not through `localhost`.
+
+### 9.8 The refactored frontend, measured in a real browser
+
+After moving the JavaScript into `frontend/src/`, every module was requested over HTTP
+and the whole CRUD was exercised again from the browser:
+
+```
+GET /                       200
+GET /src/styles/main.css    200
+GET /src/main.js            200
+GET /src/api/products.js    200
+GET /src/ui/productTable.js 200
+
+rows rendered ............... 3     (counter = 3)
+Edit button (event delegation) filled the form with id=1, price=1299.9
+POST via the form ........... row count 4, message "Product created successfully"
+DELETE via the delegated button + confirm ... row count back to 3
+console errors .............. 0
+```
+
+---
+
+## 10. Docker
+
+### 10.1 The Dockerfile (multi-stage)
+
+```dockerfile
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+WORKDIR /build
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q clean package -DskipTests
+
+FROM eclipse-temurin:21-jre-alpine
+RUN addgroup -S spring && adduser -S spring -G spring
+WORKDIR /app
+USER spring
+COPY --from=build /build/target/products-api-1.0.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]
+```
+
+Three optimisations worth explaining in the defence:
+
+| Decision | Why |
+|---|---|
+| Two stages | The final image has **no Maven, no JDK and no source code**, only the JRE and the `.jar`. It goes from ~600 MB to ~180 MB. |
+| `COPY pom.xml` before `COPY src` | Docker caches layers. Dependencies are downloaded again **only** when `pom.xml` changes, not on every code edit. |
+| Non-root user (`USER spring`) | If the process is compromised it cannot write to the filesystem or run as root. |
+| `-XX:MaxRAMPercentage=75.0` | The JVM sizes its heap from the **container** limit instead of the host RAM, which avoids the OOM killer. |
+
+`.dockerignore` keeps `target/`, `.git/`, `frontend/`, the README and the private study
+guide out of the build context.
+
+### 10.2 The compose stack
+
+`docker-compose.yml` declares two services and one network:
+
+```
+                     products-network (bridge, internal DNS)
+   ┌───────────────────────────────┐        ┌──────────────────────────────┐
+   │           api                 │        │          postgres            │
+   │  products-api:1.0.0           │  TCP   │  postgres:16-alpine          │
+   │  :8080  ──────────────────────┼───────>│  :5432                       │
+   └───────────────────────────────┘        └──────────────────────────────┘
+              │                                          │
+        host :8080                                host :5433
+                                                    (volume postgres_data)
+```
+
+Two details that are easy to get wrong:
+
+1. **The host is `postgres`, not `localhost`.** Inside a container, `localhost` is that
+   same container. Docker's internal DNS resolves the *service name* to the IP of the
+   other container, so the JDBC URL is `jdbc:postgresql://postgres:5432/products_db`.
+2. **`depends_on: condition: service_healthy`.** A plain `depends_on` only waits for the
+   container to be *created*, not for PostgreSQL to accept connections. With the
+   `pg_isready` healthcheck, the API starts only when the database is really ready.
+
+### 10.3 Why the environment variables work
+
+Spring Boot implements **relaxed binding** for environment variables:
+
+```
+SPRING_DATASOURCE_URL       ->  spring.datasource.url
+SPRING_DATASOURCE_USERNAME  ->  spring.datasource.username
+SPRING_JPA_HIBERNATE_DDL_AUTO ->  spring.jpa.hibernate.ddl-auto
+```
+
+Upper case, dots replaced by underscores. That is why the image can be configured
+without touching `application.properties` and without rebuilding it.
+
+---
+
+## 11. CI/CD with GitHub Actions
+
+`.github/workflows/ci-cd.yml` runs on every `push` and every `pull_request` targeting
+`main` or `dev`:
+
+```
+push / pull_request  ──>  job "test"  ──(needs)──>  job "package"
+                          checkout                    checkout
+                          setup-java 21 + cache       setup-java 21 + cache
+                          mvn test                    mvn clean package -DskipTests
+                          upload surefire-reports     upload products-api-jar
+```
+
+| Concept | Meaning in this project |
+|---|---|
+| **Workflow** | The YAML file. Here: `CI/CD`. |
+| **Event** (`on`) | `push` and `pull_request` filtered by branch. |
+| **Job** | `test` and `package`, each on a fresh virtual machine. |
+| **Runner** | `ubuntu-latest`, provided by GitHub. |
+| **Step** | One command: `uses:` for a reusable action, `run:` for a shell command. |
+| **Action** | `actions/checkout@v4`, `actions/setup-java@v4`, `actions/upload-artifact@v4`. |
+| **Artifact** | The `.jar` and the test reports, downloadable from the run page. |
+| **`needs: test`** | `package` does not start if the tests fail. |
+
+No database service is needed: the service tests mock the repository with Mockito and
+the controller tests use `@WebMvcTest` + MockMvc, so they never open a connection.
+
+Why `-DskipTests` in the packaging job is not cheating: `needs: test` already guarantees
+that the same commit passed the suite, and running it twice would only waste minutes.
+
+> **Where the "CD" part goes:** a third job would build and push the Docker image to a
+> registry and deploy it. It is deliberately left out because it needs credentials and a
+> real server; a fake deploy step is worse than an honest gap.

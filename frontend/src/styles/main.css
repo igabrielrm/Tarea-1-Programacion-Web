@@ -1,0 +1,169 @@
+/* =====================================================================================
+ *  styles/main.css - Styles of the Vanilla JS demo frontend
+ *
+ *  Kept out of index.html on purpose: the HTML only declares structure, this file
+ *  declares presentation. It is the same separation a component library (Bootstrap)
+ *  or a framework (React + CSS modules) would apply.
+ * ===================================================================================== */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 24px;
+}
+
+h1 {
+    font-size: 1.6rem;
+    margin-bottom: 4px;
+}
+
+.sub {
+    color: #94a3b8;
+    margin-bottom: 24px;
+    font-size: 0.9rem;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 24px;
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.card h2 {
+    font-size: 1rem;
+    margin-bottom: 14px;
+    color: #38bdf8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+label {
+    display: block;
+    font-size: 0.8rem;
+    margin: 12px 0 5px;
+    color: #94a3b8;
+}
+
+input {
+    width: 100%;
+    padding: 9px 11px;
+    border-radius: 8px;
+    border: 1px solid #475569;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-size: 0.9rem;
+}
+
+input:focus {
+    outline: none;
+    border-color: #38bdf8;
+}
+
+button {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-top: 16px;
+    margin-right: 8px;
+}
+
+.btn-primary {
+    background: #38bdf8;
+    color: #082f49;
+}
+
+.btn-sec {
+    background: #334155;
+    color: #e2e8f0;
+}
+
+.btn-danger {
+    background: #ef4444;
+    color: #ffffff;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+
+th,
+td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #334155;
+}
+
+th {
+    color: #94a3b8;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+}
+
+td.actions button {
+    margin: 0 4px 0 0;
+    padding: 4px 9px;
+    font-size: 0.75rem;
+    margin-top: 0;
+}
+
+#statusMessage {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.83rem;
+    display: none;
+}
+
+.ok {
+    background: #14532d;
+    color: #86efac;
+    border: 1px solid #166534;
+    display: block !important;
+}
+
+.error {
+    background: #7f1d1d;
+    color: #fecaca;
+    border: 1px solid #991b1b;
+    display: block !important;
+}
+
+.hint {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-top: 6px;
+}
+
+code {
+    background: #0f172a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    color: #fbbf24;
+}
