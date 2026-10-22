@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        SPRING BOOT PARENT
+        It automatically inherits: the versions already tested together of Spring Boot,
+        Spring Framework, Hibernate and the Java compilation plugin.
+        This is the official way to start a Spring Boot project (never use "import scope").
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.16</version>
+        <relativePath/> <!-- The parent lives in Maven Central, not on disk -->
+    </parent>
+
+    <!-- Unique identifier of our application -->
+    <groupId>com.tienda</groupId>
+    <artifactId>products-api</artifactId>
+    <version>1.0.0</version>
+    <name>products-api</name>
+    <description>REST CRUD API for products built with Spring Boot, JPA and PostgreSQL</description>
+
+    <properties>
+        <!-- Java version used to compile the code (Spring Boot 3.x requires 17+) -->
+        <java.version>21</java.version>
+        <!-- project.build.sourceEncoding=UTF-8: already the default in the parent -->
+    </properties>
+
+    <dependencies>
+
+        <!--
+            spring-boot-starter-web
+            = Spring MVC + embedded Tomcat + Jackson (converts Java objects <-> JSON).
+            It is what allows us to have @RestController controllers and expose HTTP endpoints.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-data-jpa
+            = Adds Hibernate (the ORM engine) + Spring Data JPA (the repositories we write).
+            It is what maps the Product entity against the PostgreSQL table.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-validation
+            = Enables Bean Validation (@Valid, @NotBlank, @Min, @Digits...).
+            It allows rejecting invalid data BEFORE it ever reaches the database.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+            Official PostgreSQL JDBC driver.
+            "runtime" = it is only needed while the app runs, not at compile time.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- JUnit 5 + Mockito + Spring Test: for the automated tests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                spring-boot-maven-plugin
+                It allows running "mvn spring-boot:run" and packaging an executable .jar
+                with "mvn package" (a single file that embeds Tomcat and every dependency).
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

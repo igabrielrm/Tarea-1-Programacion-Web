@@ -1,0 +1,61 @@
+# =====================================================================================
+#  Collection of HTTP requests to test the API.
+#  Compatible with: IntelliJ IDEA ("HTTP Client" tab) and with the
+#  "REST Client" extension for VS Code. In VS Code: right click > "Send Request".
+# =====================================================================================
+
+@host = http://localhost:8080
+@baseUrl = {{host}}/api/products
+
+### GET - List all the products
+GET {{baseUrl}}
+Accept: application/json
+
+### GET - Search products by name (the endpoint used by the debounced search box)
+GET {{baseUrl}}/search?q=laptop
+Accept: application/json
+
+### GET - Find a product by id
+GET {{baseUrl}}/1
+Accept: application/json
+
+### POST - Create a product
+POST {{baseUrl}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "Monitor 27 inches",
+  "description": "QHD IPS monitor with a 165 Hz panel",
+  "price": 349.00
+}
+
+### POST - Create a product with INVALID data (to see the validation -> 400)
+POST {{baseUrl}}
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "",
+  "description": "Product without a name and without a price",
+  "price": -50
+}
+
+### PUT - Update a product
+PUT {{baseUrl}}/1
+Content-Type: application/json
+Accept: application/json
+
+{
+  "name": "Laptop Pro 14 inches",
+  "description": "Laptop updated with 32 GB of RAM",
+  "price": 1499.00
+}
+
+### DELETE - Delete a product
+DELETE {{baseUrl}}/1
+Accept: application/json
+
+### GET - Find a product that does not exist (to see the 404 error)
+GET {{baseUrl}}/999
+Accept: application/json

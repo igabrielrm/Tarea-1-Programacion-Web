@@ -1,0 +1,29 @@
+# ============================================================
+#  .gitignore - Files that must NOT be pushed to the repository
+# ============================================================
+
+# Java compilation output
+target/
+
+# Operating system files (Windows / macOS)
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+
+# Logs
+*.log
+logs/
+
+# Environment files (never commit real credentials)
+.env
+
+# ============================================================
+#  PRIVATE STUDY GUIDE - personal notes, never pushed to GitHub
+# ============================================================
+guia_estudio_personal.md

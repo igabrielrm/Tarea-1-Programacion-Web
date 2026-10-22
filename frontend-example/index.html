@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Products CRUD - Vanilla JS + Spring Boot</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: "Segoe UI", system-ui, sans-serif;
+            background: #0f172a; color: #e2e8f0; padding: 24px;
+        }
+        h1 { font-size: 1.6rem; margin-bottom: 4px; }
+        .sub { color: #94a3b8; margin-bottom: 24px; font-size: .9rem; }
+        .grid { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+        .card {
+            background: #1e293b; border: 1px solid #334155;
+            border-radius: 12px; padding: 20px;
+        }
+        .card h2 { font-size: 1rem; margin-bottom: 14px; color: #38bdf8; text-transform: uppercase; letter-spacing: .05em; }
+        label { display: block; font-size: .8rem; margin: 12px 0 5px; color: #94a3b8; }
+        input {
+            width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid #475569;
+            background: #0f172a; color: #e2e8f0; font-size: .9rem;
+        }
+        input:focus { outline: none; border-color: #38bdf8; }
+        button {
+            padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer;
+            font-size: .85rem; font-weight: 600; margin-top: 16px; margin-right: 8px;
+        }
+        .btn-primary { background: #38bdf8; color: #082f49; }
+        .btn-sec { background: #334155; color: #e2e8f0; }
+        .btn-danger { background: #ef4444; color: #fff; }
+        table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: #94a3b8; font-size: .75rem; text-transform: uppercase; }
+        td.actions button { margin: 0 4px 0 0; padding: 4px 9px; font-size: .75rem; margin-top: 0; }
+        #statusMessage { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: .83rem; display: none; }
+        .ok { background: #14532d; color: #86efac; border: 1px solid #166534; display: block !important; }
+        .error { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; display: block !important; }
+        .hint { font-size: .75rem; color: #64748b; margin-top: 6px; }
+        code { background: #0f172a; padding: 2px 6px; border-radius: 4px; font-size: .82rem; color: #fbbf24; }
+    </style>
+</head>
+<body>
+
+<h1>Products CRUD</h1>
+<p class="sub">Frontend <strong>Vanilla JS</strong> (port 5500) consuming the <strong>Spring Boot</strong> API (port 8080) &mdash; PostgreSQL</p>
+
+<div class="grid">
+
+    <!-- ================= FORM ================= -->
+    <div class="card">
+        <h2 id="formTitle">New product</h2>
+
+        <form id="productForm">
+            <label for="id">ID (read only, PostgreSQL generates it)</label>
+            <input type="text" id="id" readonly placeholder="assigned on save">
+
+            <label for="name">Name *</label>
+            <input type="text" id="name" placeholder="Laptop Pro 14" required>
+
+            <label for="description">Description</label>
+            <input type="text" id="description" placeholder="Laptop with 16 GB RAM">
+
+            <label for="price">Price *</label>
+            <input type="number" id="price" step="0.01" min="0" placeholder="1299.90" required>
+
+            <div>
+                <button type="submit" class="btn-primary" id="saveButton">Save</button>
+                <button type="button" class="btn-sec" id="cancelButton">Cancel</button>
+            </div>
+        </form>
+
+        <div id="statusMessage"></div>
+    </div>
+
+    <!-- ================= TABLE ================= -->
+    <div class="card">
+        <h2>Products (<span id="counter">0</span>)</h2>
+
+        <label for="search">Search by name</label>
+        <input type="text" id="search" placeholder="Type to search..." autocomplete="off">
+        <p class="hint">
+            Debounced with <code>setTimeout</code>: the request is only fired
+            <strong>4 seconds</strong> after the user stops typing.
+        </p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th><th>Name</th><th>Description</th><th>Price</th><th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

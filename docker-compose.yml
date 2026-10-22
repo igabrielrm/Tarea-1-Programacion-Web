@@ -1,0 +1,42 @@
+# =====================================================================================
+#  POSTGRESQL DATABASE WITH DOCKER
+#
+#  If you do not have PostgreSQL installed on Windows, this brings the database
+#  up in 10 seconds with the command:
+#      docker compose up -d
+#
+#  The API then connects using EXACTLY the values in application.properties:
+#      host     = localhost
+#      port     = 5432
+#      user     = postgres
+#      password = postgres
+#      database = products_db
+# =====================================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine          # PostgreSQL 16 (lightweight image)
+    container_name: products-db        # Readable name for the container
+    restart: unless-stopped            # It restarts on its own if the machine reboots
+    environment:
+      POSTGRES_DB: products_db          # Creates the "products_db" database on startup
+      POSTGRES_USER: postgres           # Creates the "postgres" user
+      POSTGRES_PASSWORD: postgres       # Password: "postgres" (change it if you want)
+    ports:
+      # Host port -> container port.
+      # By default it is 5432 (the standard PostgreSQL port).
+      # If you already have PostgreSQL installed and running on your PC, it takes 5432:
+      #   POSTGRES_PORT=5433 docker compose up -d
+      # and then in application.properties:
+      #   spring.datasource.url=jdbc:postgresql://localhost:5433/products_db
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # The data survives even if the container is deleted
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d products_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:                      # Named volume used to persist the data
