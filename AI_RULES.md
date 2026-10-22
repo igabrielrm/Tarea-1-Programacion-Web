@@ -120,8 +120,16 @@ src/
 ├── api/          # HTTP layer ONLY: fetch calls, URLs, headers, error mapping
 ├── ui/           # View layer ONLY: DOM queries, rendering, event binding
 ├── main.js       # Entry point ONLY: wires api + ui together, app bootstrap
-└── styles/       # CSS, split by component or concern
+└── styles/       # OPTIONAL: only for CSS Tailwind cannot express
 ```
+
+### Styling rule
+
+Styling is done with **Tailwind CSS utility classes** loaded through the Play CDN
+(pinned version) in `index.html`. There is **no `src/styles/` folder**: keeping a
+hand-written CSS file next to Tailwind only creates two sources of truth that fight
+each other. Add `src/styles/` back only for something utilities genuinely cannot do
+(keyframes, complex selectors), and document why.
 
 ### Hard constraints
 
@@ -146,9 +154,8 @@ frontend/
 ├── index.html                  # structure only, loads src/main.js as a module
 └── src/
     ├── api/products.js         # fetch() lives here and nowhere else
-    ├── ui/productTable.js      # all DOM access lives here
-    ├── main.js                 # wiring + state (edit mode, debounce)
-    └── styles/main.css         # presentation
+    ├── ui/productGrid.js       # all DOM access lives here (product cards)
+    └── main.js                 # wiring + state (edit mode, search term)
 ```
 
 The old `frontend-example/` folder was deleted during this refactor. Do not recreate
@@ -156,7 +163,10 @@ it and do not add `<script src="js/...">` tags: the page loads exactly one modul
 
 Because ES modules do not create globals, inline `onclick="..."` attributes are
 forbidden. Row buttons must carry `data-action` / `data-id` and be handled through
-event delegation in `ui/productTable.js`.
+event delegation in `ui/productGrid.js`.
+
+The products are rendered as **cards inside a CSS grid**, not as a table. A file named
+`productTable.js` would describe something the app no longer does.
 
 ---
 

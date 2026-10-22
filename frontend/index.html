@@ -5,61 +5,123 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Products CRUD - Vanilla JS + Spring Boot</title>
 
-    <!-- Presentation lives in its own file, outside the HTML and outside the JS. -->
-    <link rel="stylesheet" href="src/styles/main.css">
+    <!--
+        Tailwind CSS through the official Play CDN.
+        The version is pinned on purpose: "cdn.tailwindcss.com" alone always serves the
+        latest build, so a future release could change how the page looks. With 3.4.17
+        the design is reproducible in any browser, today and in the oral defence.
+        The Play CDN compiles the utility classes in the browser, which is perfect for a
+        class project but NOT recommended for real production (it ships a compiler to
+        every visitor); in a real project Tailwind would be pre-compiled by Vite/PostCSS.
+    -->
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
 </head>
-<body>
 
-<h1>Products CRUD</h1>
-<p class="sub">Frontend <strong>Vanilla JS</strong> (port 5500) consuming the <strong>Spring Boot</strong> API (port 8080) &mdash; PostgreSQL</p>
+<body class="min-h-screen bg-slate-100 text-slate-800 antialiased">
+<div class="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
 
-<div class="grid">
+    <!-- ===================== HEADER ===================== -->
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Products</h1>
+            <p class="mt-1 text-sm text-slate-500">
+                Vanilla JS frontend (port 5500) consuming the Spring Boot API (port 8080) &mdash; PostgreSQL
+            </p>
+        </div>
 
-    <!-- ================= FORM ================= -->
-    <div class="card">
-        <h2 id="formTitle">New product</h2>
+        <span class="inline-flex w-fit items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+            REST API connected
+        </span>
+    </header>
 
-        <form id="productForm">
-            <label for="id">ID (read only, PostgreSQL generates it)</label>
-            <input type="text" id="id" readonly placeholder="assigned on save">
+    <!-- ===================== CREATE / EDIT FORM ===================== -->
+    <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="formTitle" class="text-lg font-semibold text-slate-900">New product</h2>
 
-            <label for="name">Name *</label>
-            <input type="text" id="name" placeholder="Laptop Pro 14" required>
+            <div class="flex items-center gap-2">
+                <label for="id" class="text-xs font-medium uppercase tracking-wide text-slate-400">ID</label>
+                <input type="text" id="id" readonly placeholder="auto"
+                       class="w-20 cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-center text-xs text-slate-500">
+            </div>
+        </div>
 
-            <label for="description">Description</label>
-            <input type="text" id="description" placeholder="Laptop with 16 GB RAM">
-
-            <label for="price">Price *</label>
-            <input type="number" id="price" step="0.01" min="0" placeholder="1299.90" required>
+        <form id="productForm" class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label for="name" class="mb-1.5 block text-sm font-medium text-slate-700">
+                    Name <span class="text-rose-500">*</span>
+                </label>
+                <input type="text" id="name" required maxlength="120" placeholder="Laptop Pro 14"
+                       class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm transition placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+            </div>
 
             <div>
-                <button type="submit" class="btn-primary" id="saveButton">Save</button>
-                <button type="button" class="btn-sec" id="cancelButton">Cancel</button>
+                <label for="description" class="mb-1.5 block text-sm font-medium text-slate-700">Description</label>
+                <input type="text" id="description" maxlength="500" placeholder="Laptop with 16 GB of RAM"
+                       class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm transition placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+            </div>
+
+            <div>
+                <label for="price" class="mb-1.5 block text-sm font-medium text-slate-700">
+                    Price <span class="text-rose-500">*</span>
+                </label>
+                <input type="number" id="price" step="0.01" min="0" required placeholder="1299.90"
+                       class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm transition placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 md:col-span-2 lg:col-span-3">
+                <button type="submit" id="saveButton"
+                        class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2">
+                    Save product
+                </button>
+                <button type="button" id="cancelButton"
+                        class="inline-flex items-center justify-center rounded-xl bg-slate-100 px-5 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-offset-2">
+                    Cancel
+                </button>
             </div>
         </form>
 
-        <div id="statusMessage"></div>
-    </div>
+        <!-- Filled by ui/productGrid.js. role="status" makes screen readers announce it. -->
+        <p id="statusMessage" role="status" aria-live="polite"
+           class="mt-4 hidden rounded-xl px-4 py-3 text-sm font-medium"></p>
+    </section>
 
-    <!-- ================= TABLE ================= -->
-    <div class="card">
-        <h2>Products (<span id="counter">0</span>)</h2>
+    <!-- ===================== SEARCH BAR ===================== -->
+    <section class="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="relative w-full sm:max-w-md">
+            <svg class="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400"
+                 fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="7"></circle>
+                <path stroke-linecap="round" d="m20 20-3.5-3.5"></path>
+            </svg>
 
-        <label for="search">Search by name</label>
-        <input type="text" id="search" placeholder="Type to search..." autocomplete="off">
-        <p class="hint">
-            Debounced with <code>setTimeout</code>: the request is only fired
-            <strong>4 seconds</strong> after the user stops typing.
+            <input id="search" type="search" autocomplete="off" placeholder="Search products by name..."
+                   aria-label="Search products by name"
+                   class="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm transition placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+        </div>
+
+        <p class="text-sm text-slate-500" aria-live="polite">
+            <span id="counter" class="font-semibold text-slate-900">0</span> products shown
         </p>
+    </section>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th><th>Name</th><th>Description</th><th>Price</th><th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="tableBody"></tbody>
-        </table>
+    <!-- ===================== CARD GRID ===================== -->
+    <!--
+        THE STRICT GRID:
+          grid-cols-1  -> 1 column on phones
+          sm:grid-cols-2 -> 2 columns from 640 px
+          lg:grid-cols-3 -> exactly 3 columns on desktop (from 1024 px)
+        The cards are created by ui/productGrid.js, so this element stays empty here.
+    -->
+    <section id="productGrid"
+             class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3"></section>
+
+    <!-- Shown by ui/productGrid.js when the filter returns zero products. -->
+    <div id="emptyState"
+         class="mt-6 hidden rounded-2xl border border-dashed border-slate-300 bg-white/60 p-12 text-center">
+        <p class="text-sm font-medium text-slate-700">No products found</p>
+        <p class="mt-1 text-sm text-slate-500">Try a different search term or create a new product.</p>
     </div>
 
 </div>

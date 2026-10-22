@@ -49,12 +49,11 @@ products-api/
 │   └── controller/ProductControllerTest.java      15 web tests (MockMvc, no server)
 │
 └── frontend/                                Demo Vanilla JS frontend (ES modules)
-    ├── index.html                           Structure only, loads src/main.js
+    ├── index.html                           Structure only, loads src/main.js + Tailwind CDN
     └── src/
         ├── api/products.js                  HTTP layer: the only file that calls fetch()
-        ├── ui/productTable.js               View layer: the only file that touches the DOM
-        ├── main.js                          Wiring, state (edit mode) and the debounce
-        └── styles/main.css                  Presentation
+        ├── ui/productGrid.js                View layer: the only file that touches the DOM
+        └── main.js                          Wiring, state (edit mode) and the instant filter
 ```
 
 ---
@@ -264,13 +263,25 @@ curl -X POST http://localhost:8080/api/products \
                the Controller answers 201 Created with the JSON of the created product.
 ```
 
-### 5.3 Search — `GET /api/products/search?q=term`
+### 5.3 Search — two different things share the name
 
-The endpoint uses a derived query: `findByNameContainingIgnoreCaseOrderByNameAsc(term)`, which
-Spring Data turns into `SELECT * FROM products WHERE LOWER(name) LIKE LOWER('%term%') ORDER BY name ASC`.
+There are **two** search implementations in this project, and they are not the same:
 
-The frontend applies a **4 second debounce** (see `frontend/src/main.js`) so the request is
-only sent once the user stops typing.
+| | Server-side endpoint | Client-side filter (what the UI uses) |
+|---|---|---|
+| Name | `GET /api/products/search?q=` | `filterProducts()` in `frontend/src/main.js` |
+| How | `findByNameContainingIgnoreCaseOrderByNameAsc(term)` → `SELECT ... WHERE LOWER(name) LIKE LOWER('%term%')` | `Array.prototype.filter()` + `String.prototype.includes()` |
+| Network | one request per call | **zero** requests |
+| When it is the right choice | thousands of rows, pagination | the whole list already fits in memory |
+
+The UI loads the full list **once** with `GET /api/products`, keeps it in the
+`allProducts` array and filters that array on every keystroke. That is why the grid
+updates instantly and the Network tab stays silent while typing. The endpoint is kept
+because it is the only viable option the day the list has to be paginated.
+
+The **4 second debounce** described in earlier versions of this README was removed on
+purpose: a debounce exists to protect the server from a request per keystroke, and
+there is no request anymore.
 
 ### 5.4 Errors
 
@@ -374,9 +385,10 @@ docker compose down -v           # Stop both and delete the volume
 - **`@Transactional`** with `readOnly = true` on the reads (faster, it does not lock rows).
 - **Global exception handler** so every error leaves as JSON.
 - **Automated tests with Mockito and MockMvc** that need neither a database nor a server.
-- **Debounced search** so typing does not flood the backend with requests.
+- **Instant client-side filtering** so typing never generates a single HTTP request.
 - **Modular frontend** (`api` / `ui` / `main`) with ES modules, so no file mixes HTTP,
   DOM and orchestration.
+- **Tailwind CSS with a pinned CDN** and a strictly responsive 1 / 2 / 3 column grid.
 - **Multi-stage Dockerfile** and a compose stack with healthchecks.
 - **CI pipeline** that blocks the build when a test fails.
 
@@ -425,18 +437,42 @@ Access-Control-Allow-Credentials: true
 Access-Control-Max-Age: 3600
 ```
 
-### 9.4 The debounce, measured in the browser
+### 9.4 The instant search, measured in the browser
 
-Typing `lap` (3 keystrokes) in the search box and watching the Network tab:
+Typing `l`, `la`, `lap`, `zzz` and then clearing the box. The DOM was read in the
+**same synchronous tick** as the `input` event, with no `await` and no `setTimeout`:
+
+| Typed | Cards in the DOM | Counter | Empty state | API requests |
+|---|---|---|---|---|
+| `l` | 3 | 3 | hidden | 2 |
+| `la` | 1 | 1 | hidden | 2 |
+| `lap` | 1 | 1 | hidden | 2 |
+| `zzz` | 0 | 0 | visible | 2 |
+| *(cleared)* | 3 | 3 | hidden | 2 |
+
+The API request count never moved: **zero requests per keystroke**. The two entries
+were measured once before typing and are the module file (`/src/api/products.js`) plus
+the single initial `GET /api/products`. Console errors: 0.
+
+### 9.4.1 The responsive grid, measured
+
+The whole page was loaded in iframes of fixed width and the computed
+`grid-template-columns` of `#productGrid` was read:
+
+| Viewport | Columns | Tailwind class responsible |
+|---|---|---|
+| `375 px` | 1 | `grid-cols-1` |
+| `800 px` | 2 | `sm:grid-cols-2` |
+| `1440 px` | 3 | `lg:grid-cols-3` |
+
+### 9.4.2 The CRUD still works through the cards
 
 ```
-keystrokes typed ............ 3
-requests fired immediately .. 0     <- the timer was still pending
-requests fired after 4 s .... 1     GET /api/products/search?q=lap -> 200
-console errors .............. 0
+Edit button (event delegation) -> form filled: "Editing product #1", id=1, €1,299.90
+Cancel                        -> back to "New product"
+Create form                   -> 4 cards, "Product created successfully", €12.50
+Delete button + confirm       -> 3 cards, "Product deleted successfully"
 ```
-
-The table was filtered down to the single matching product.
 
 ### 9.5 The SQL that Hibernate really generates
 
@@ -494,15 +530,14 @@ and the whole CRUD was exercised again from the browser:
 
 ```
 GET /                       200
-GET /src/styles/main.css    200
 GET /src/main.js            200
 GET /src/api/products.js    200
-GET /src/ui/productTable.js 200
+GET /src/ui/productGrid.js  200
 
-rows rendered ............... 3     (counter = 3)
+cards rendered .............. 3     (counter = 3)
 Edit button (event delegation) filled the form with id=1, price=1299.9
-POST via the form ........... row count 4, message "Product created successfully"
-DELETE via the delegated button + confirm ... row count back to 3
+POST via the form ........... card count 4, message "Product created successfully"
+DELETE via the delegated button + confirm ... card count back to 3
 console errors .............. 0
 ```
 
@@ -614,3 +649,101 @@ that the same commit passed the suite, and running it twice would only waste min
 > **Where the "CD" part goes:** a third job would build and push the Docker image to a
 > registry and deploy it. It is deliberately left out because it needs credentials and a
 > real server; a fake deploy step is worse than an honest gap.
+
+---
+
+## 12. The user interface (Tailwind CSS)
+
+### 12.1 Why the CDN is pinned
+
+```html
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+```
+
+`https://cdn.tailwindcss.com` alone always serves the newest build, so the design could
+change between two runs of the same commit. Pinning `3.4.17` makes the page
+reproducible. The Play CDN compiles the classes **in the browser**, which is perfect for
+a class project and wrong for production: a real deployment pre-compiles Tailwind with
+Vite/PostCSS and ships a plain `.css` file.
+
+### 12.2 The strict grid
+
+```html
+<section id="productGrid"
+         class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+```
+
+| Class | What it does | Breakpoint |
+|---|---|---|
+| `grid` | Turns the container into a CSS grid (`display: grid`). | always |
+| `grid-cols-1` | `grid-template-columns: repeat(1, minmax(0, 1fr))` — 1 column. | `0 px` |
+| `sm:grid-cols-2` | The same with 2 columns. | `≥ 640 px` |
+| `lg:grid-cols-3` | The same with 3 columns — the desktop layout. | `≥ 1024 px` |
+| `gap-6` | `gap: 1.5rem` between cards, horizontally and vertically. | always |
+
+Tailwind is **mobile first**: the unprefixed class applies to every width, and each
+`sm:` / `lg:` variant only overrides it from its breakpoint upwards. That is why the
+order is `1 → 2 → 3` and not `3 → 2 → 1`.
+
+`minmax(0, 1fr)` matters: with plain `1fr` a grid item refuses to shrink below its
+content (a long product name would blow the column up). `minmax(0, …)` allows it.
+
+### 12.3 The card
+
+```html
+<article class="group flex flex-col justify-between rounded-2xl border border-slate-200
+                bg-white p-5 shadow-sm transition duration-200
+                hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg">
+    ...
+    <div class="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <span class="text-lg font-bold tracking-tight text-slate-900">€1,299.90</span>
+        <button data-action="edit" data-id="1" class="...">Edit</button>
+        <button data-action="delete" data-id="1" class="...">Delete</button>
+    </div>
+</article>
+```
+
+`flex flex-col justify-between` is what makes every card the same height with the price
+pinned to the bottom, even when one description is two lines longer than another: the
+grid stretches all items of a row, and `justify-between` pushes the footer down.
+
+`line-clamp-3` truncates a long description with an ellipsis after three lines.
+
+### 12.4 The instant filter
+
+```js
+function filterProducts(products, term) {
+    const needle = term.trim().toLowerCase();
+    if (needle === '') return products;                    // empty search -> everything
+    return products.filter((p) => p.name.toLowerCase().includes(needle));
+}
+
+searchInput.addEventListener('input', () => handlers.onSearch(getSearchTerm()));
+```
+
+Three decisions behind it:
+
+1. **Client-side, not server-side.** The full list is read once and kept in the
+   `allProducts` array. Filtering that array is a few microseconds; a request is tens of
+   milliseconds at best. For a few hundred products the network is pure latency.
+2. **No debounce.** A debounce delays a *side effect* (the request). With no request
+   there is nothing to delay, and adding a timer would only make the UI feel slow.
+3. **`filter` returns a new array.** `allProducts` is never mutated, so the next
+   keystroke still filters the complete list instead of the previous result.
+
+When the dataset grows past what fits in memory, this design has to change: paginate on
+the server and go back to `GET /api/products/search?q=` (which is exactly why that
+endpoint still exists).
+
+### 12.5 Why Tailwind instead of a CSS file
+
+The previous version had `src/styles/main.css` with hand-written selectors
+(`.card h2`, `td.actions button`, …). Tailwind replaces it because:
+
+- The design lives **next to the markup** it styles, so a class and the element it
+  affects are never in two different files.
+- Deleting a card deletes its styles, so dead CSS cannot accumulate.
+- Responsive behaviour (`sm:`, `lg:`) is a prefix, not a second file with media queries.
+
+The trade-off is a long `class` attribute. That is why the card's class list and the
+message colour variants are kept in constants at the top of `ui/productGrid.js`.

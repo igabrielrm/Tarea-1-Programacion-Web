@@ -2,7 +2,7 @@
  *  main.js - Entry point (application / orchestration logic)
  *
  *  Responsibility: wire the HTTP layer (api/products.js) with the view layer
- *  (ui/productTable.js) and own the state of the screen. There is no fetch() and no
+ *  (ui/productGrid.js) and own the state of the screen. There is no fetch() and no
  *  direct DOM manipulation here: everything goes through the two modules above.
  *
  *  Loaded by index.html with:  <script type="module" src="src/main.js"></script>
@@ -10,37 +10,38 @@
 
 import {
     getProducts,
-    searchProducts,
     getProduct,
     createProduct,
     updateProduct,
     deleteProduct
 } from './api/products.js';
 
-import * as ui from './ui/productTable.js';
+import * as ui from './ui/productGrid.js';
 
-// How long the user must stop typing before the search request is fired (milliseconds).
-const DEBOUNCE_DELAY_MS = 4000;
+/**
+ * The full list of products as it was last read from the API.
+ *
+ * This is the "source of truth" of the instant search: the filter NEVER asks the
+ * server again, it just walks this array. That is why typing is instantaneous and why
+ * the search box produces zero HTTP requests.
+ *
+ * @type {Array<object>}
+ */
+let allProducts = [];
 
-// Holds the id of the pending search timer. This is the state of the debounce.
-let searchTimer = null;
-
-// Id of the product being edited (null = the form is creating a new product).
+/**
+ * Id of the product being edited (null = the form is creating a new product).
+ */
 let productBeingEdited = null;
 
 /**
- * Loads the products from the API and paints them in the table.
- *
- * @param {string} term - optional search term. When empty the full list is loaded.
+ * Loads the full list from the API, keeps it in memory and repaints the grid using the
+ * search term that is currently written in the input.
  */
-async function loadProducts(term = '') {
+async function loadProducts() {
     try {
-        // "await" pauses only this function until the Promise settles.
-        const products = term
-            ? await searchProducts(term)
-            : await getProducts();
-
-        ui.renderProducts(products);
+        allProducts = await getProducts();
+        applyFilter(ui.getSearchTerm());
     } catch (error) {
         // If the API is not running or there is a CORS error, we land here.
         ui.showMessage(`Could not load the list: ${error.message}`, true);
@@ -48,33 +49,40 @@ async function loadProducts(term = '') {
 }
 
 /**
- * DEBOUNCE: schedules the search request 4 seconds after the user stops typing.
+ * Pure function: given a list and a term, returns the products whose name contains it.
  *
- * How it works:
- *   1. Every keystroke reaches this function.
- *   2. If a timer is already running we CANCEL it (clearTimeout).
- *   3. We start a brand new 4000 ms timer.
- *   4. Only when 4 full seconds pass WITHOUT a new keystroke does the timer fire and
- *      the request is actually sent.
+ * "Pure" means it has no side effects: it does not touch the DOM, it does not call the
+ * network and it does not modify the array it receives (filter returns a NEW array).
+ * Being pure makes it trivial to test and to reason about.
  *
- * Why: typing "laptop" is 6 keystrokes. Without a debounce that is 6 HTTP requests;
- * with a debounce it is 1, sent 4 seconds after the last letter.
+ * @param {Array<object>} products - the full list.
+ * @param {string} term            - what the user typed.
+ * @returns {Array<object>} the matching products (the same list when the term is empty).
+ */
+function filterProducts(products, term) {
+    const needle = term.trim().toLowerCase();
+
+    // An empty search must show everything, not an empty grid.
+    if (needle === '') {
+        return products;
+    }
+
+    // includes() is a case-insensitive "contains" because both sides were lowercased.
+    return products.filter((product) =>
+        String(product.name ?? '').toLowerCase().includes(needle)
+    );
+}
+
+/**
+ * Repaints the grid with the products that match the term.
+ *
+ * Called on EVERY keystroke. No setTimeout, no debounce, no request: it only reads the
+ * in-memory array and rebuilds the DOM nodes, which takes microseconds.
  *
  * @param {string} term - the current text of the search box.
  */
-function scheduleSearch(term) {
-    // Step 1: cancel the pending timer (if any). This is what makes it a "debounce"
-    // and not a "throttle": every new keystroke pushes the deadline further away.
-    if (searchTimer !== null) {
-        clearTimeout(searchTimer);
-    }
-
-    // Step 2: start a new timer. setTimeout returns an id that we can cancel later.
-    searchTimer = setTimeout(() => {
-        // Step 3: the deadline was reached, so we finally ask the backend for the data.
-        searchTimer = null;
-        loadProducts(term);
-    }, DEBOUNCE_DELAY_MS);
+function applyFilter(term) {
+    ui.renderProducts(filterProducts(allProducts, term));
 }
 
 /**
@@ -107,7 +115,8 @@ async function handleDelete(id) {
     try {
         await deleteProduct(id);
         ui.showMessage('Product deleted successfully');
-        await loadProducts(ui.getSearchTerm());
+        // We reload the full list so the in-memory copy stays in sync with the database.
+        await loadProducts();
     } catch (error) {
         ui.showMessage(error.message, true);
     }
@@ -131,7 +140,7 @@ async function handleSubmit(product) {
         }
 
         handleCancel();
-        await loadProducts(ui.getSearchTerm());
+        await loadProducts();
     } catch (error) {
         // Here we receive the 400 (validation) and 409 (duplicate) answers of the API.
         ui.showMessage(error.message, true);
@@ -154,7 +163,7 @@ function handleCancel() {
 ui.bindEvents({
     onSubmit: handleSubmit,
     onCancel: handleCancel,
-    onSearch: scheduleSearch,
+    onSearch: applyFilter,
     onEdit: handleEdit,
     onDelete: handleDelete
 });
