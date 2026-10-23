@@ -3,7 +3,7 @@
 Complete CRUD (GET, POST, PUT, DELETE) over the **Product** entity (`id`, `name`, `description`, `price`),
 organised in layers (Entity → Repository → Service → Controller), with global CORS for a Vanilla JS frontend.
 
-**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven
+**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven · Docker · GitHub Actions
 
 ---
 
@@ -12,7 +12,10 @@ organised in layers (Entity → Repository → Service → Controller), with glo
 ```
 products-api/
 ├── pom.xml                                  Dependencies and the Spring Boot version
-├── docker-compose.yml                       Brings PostgreSQL up without installing it
+├── Dockerfile                               Multi-stage image (build + runtime)
+├── .dockerignore                            What never enters the build context
+├── docker-compose.yml                       PostgreSQL + API as two containers
+├── .github/workflows/ci-cd.yml              GitHub Actions pipeline
 ├── http/products-api.http                   Test requests (IntelliJ / VS Code)
 │
 ├── src/main/java/com/tienda/products/
@@ -44,9 +47,13 @@ products-api/
 ├── src/test/java/com/tienda/products/
 │   ├── service/impl/ProductServiceImplTest.java   9 unit tests (Mockito, no database)
 │   └── controller/ProductControllerTest.java      15 web tests (MockMvc, no server)
-└── frontend-example/                        Demo Vanilla JS frontend
-    ├── index.html
-    └── js/{api.js, app.js}
+│
+└── frontend/                                Demo Vanilla JS frontend (ES modules)
+    ├── index.html                           Structure only, loads src/main.js + Tailwind CDN
+    └── src/
+        ├── api/products.js                  HTTP layer: the only file that calls fetch()
+        ├── ui/productGrid.js                View layer: the only file that touches the DOM
+        └── main.js                          Wiring, state (edit mode) and the instant filter
 ```
 
 ---
@@ -73,12 +80,12 @@ spring.datasource.username=postgres
 spring.datasource.password=YOUR_REAL_PASSWORD
 ```
 
-**Option B — Docker (if you do not want to touch your installation):**
+**Option B — Docker, database only (API runs locally with Maven):**
 
-Since your local PostgreSQL already takes port 5432, run the container on another port:
+Since your local PostgreSQL already takes port 5432, the container is published on 5433:
 
 ```bash
-POSTGRES_PORT=5433 docker compose up -d
+docker compose up -d postgres
 ```
 
 And in `application.properties`:
@@ -86,6 +93,18 @@ And in `application.properties`:
 ```properties
 spring.datasource.url=jdbc:postgresql://localhost:5433/products_db
 ```
+
+**Option C — Docker, database + API together (nothing installed locally):**
+
+```bash
+docker compose up -d --build
+```
+
+This builds the image from the `Dockerfile` and starts both containers. The API is on
+`http://localhost:8080`, PostgreSQL on `localhost:5433`, and the API receives its
+connection settings as environment variables (`SPRING_DATASOURCE_URL` → host
+`postgres`, the name of the service), so `application.properties` does not need to be
+edited at all. Details in section 10.
 
 > The `products` table **is created automatically** when the API starts
 > (`spring.jpa.hibernate.ddl-auto=update`), together with 3 sample products (`data.sql`).
@@ -104,7 +123,14 @@ Or from IntelliJ IDEA: right click on `ProductsApiApplication` → *Run*.
 
 ### 2.3 Running the frontend
 
-Open `frontend-example/index.html` with the **Live Server** extension of VS Code (port 5500).
+Serve the `frontend/` folder over HTTP — for example with the **Live Server** extension
+of VS Code (port 5500) — and open `http://localhost:5500`.
+
+> ⚠️ **Do not open `frontend/index.html` by double-clicking it.** The page uses ES
+> modules, and browsers refuse to load modules from a `file://` URL (CORS error). It
+> has to be served by a web server. Any static server works:
+> `python -m http.server 5500 --directory frontend`
+
 If you use another port, add it in `application.properties` → `app.cors.allowed-origins`.
 
 ### 2.4 Checking it
@@ -237,13 +263,25 @@ curl -X POST http://localhost:8080/api/products \
                the Controller answers 201 Created with the JSON of the created product.
 ```
 
-### 5.3 Search — `GET /api/products/search?q=term`
+### 5.3 Search — two different things share the name
 
-The endpoint uses a derived query: `findByNameContainingIgnoreCaseOrderByNameAsc(term)`, which
-Spring Data turns into `SELECT * FROM products WHERE LOWER(name) LIKE LOWER('%term%') ORDER BY name ASC`.
+There are **two** search implementations in this project, and they are not the same:
 
-The frontend applies a **4 second debounce** (see `frontend-example/js/app.js`) so the request is
-only sent once the user stops typing.
+| | Server-side endpoint | Client-side filter (what the UI uses) |
+|---|---|---|
+| Name | `GET /api/products/search?q=` | `filterProducts()` in `frontend/src/main.js` |
+| How | `findByNameContainingIgnoreCaseOrderByNameAsc(term)` → `SELECT ... WHERE LOWER(name) LIKE LOWER('%term%')` | `Array.prototype.filter()` + `String.prototype.includes()` |
+| Network | one request per call | **zero** requests |
+| When it is the right choice | thousands of rows, pagination | the whole list already fits in memory |
+
+The UI loads the full list **once** with `GET /api/products`, keeps it in the
+`allProducts` array and filters that array on every keystroke. That is why the grid
+updates instantly and the Network tab stays silent while typing. The endpoint is kept
+because it is the only viable option the day the list has to be paginated.
+
+The **4 second debounce** described in earlier versions of this README was removed on
+purpose: a debounce exists to protect the server from a request per keystroke, and
+there is no request anymore.
 
 ### 5.4 Errors
 
@@ -322,12 +360,17 @@ registry.addMapping("/api/**")
 ## 7. Useful commands
 
 ```bash
-mvn spring-boot:run        # Start the API
-mvn test                   # Run the 24 automated tests
-mvn clean package          # Build target/products-api-1.0.0.jar
+mvn spring-boot:run              # Start the API locally
+mvn test                         # Run the 24 automated tests
+mvn clean package                # Build target/products-api-1.0.0.jar
 java -jar target/products-api-1.0.0.jar
-docker compose up -d       # Start PostgreSQL
-docker compose down        # Stop PostgreSQL (keeping the data)
+
+docker build -t products-api:1.0.0 .    # Build the image only
+docker compose up -d --build     # Start PostgreSQL + the API
+docker compose logs -f api       # Follow the API logs
+docker compose ps                # See container status / healthchecks
+docker compose down              # Stop both (keeping the data)
+docker compose down -v           # Stop both and delete the volume
 ```
 
 ---
@@ -342,7 +385,12 @@ docker compose down        # Stop PostgreSQL (keeping the data)
 - **`@Transactional`** with `readOnly = true` on the reads (faster, it does not lock rows).
 - **Global exception handler** so every error leaves as JSON.
 - **Automated tests with Mockito and MockMvc** that need neither a database nor a server.
-- **Debounced search** so typing does not flood the backend with requests.
+- **Instant client-side filtering** so typing never generates a single HTTP request.
+- **Modular frontend** (`api` / `ui` / `main`) with ES modules, so no file mixes HTTP,
+  DOM and orchestration.
+- **Tailwind CSS with a pinned CDN** and a strictly responsive 1 / 2 / 3 column grid.
+- **Multi-stage Dockerfile** and a compose stack with healthchecks.
+- **CI pipeline** that blocks the build when a test fails.
 
 ---
 
@@ -389,18 +437,42 @@ Access-Control-Allow-Credentials: true
 Access-Control-Max-Age: 3600
 ```
 
-### 9.4 The debounce, measured in the browser
+### 9.4 The instant search, measured in the browser
 
-Typing `lap` (3 keystrokes) in the search box and watching the Network tab:
+Typing `l`, `la`, `lap`, `zzz` and then clearing the box. The DOM was read in the
+**same synchronous tick** as the `input` event, with no `await` and no `setTimeout`:
+
+| Typed | Cards in the DOM | Counter | Empty state | API requests |
+|---|---|---|---|---|
+| `l` | 3 | 3 | hidden | 2 |
+| `la` | 1 | 1 | hidden | 2 |
+| `lap` | 1 | 1 | hidden | 2 |
+| `zzz` | 0 | 0 | visible | 2 |
+| *(cleared)* | 3 | 3 | hidden | 2 |
+
+The API request count never moved: **zero requests per keystroke**. The two entries
+were measured once before typing and are the module file (`/src/api/products.js`) plus
+the single initial `GET /api/products`. Console errors: 0.
+
+### 9.4.1 The responsive grid, measured
+
+The whole page was loaded in iframes of fixed width and the computed
+`grid-template-columns` of `#productGrid` was read:
+
+| Viewport | Columns | Tailwind class responsible |
+|---|---|---|
+| `375 px` | 1 | `grid-cols-1` |
+| `800 px` | 2 | `sm:grid-cols-2` |
+| `1440 px` | 3 | `lg:grid-cols-3` |
+
+### 9.4.2 The CRUD still works through the cards
 
 ```
-keystrokes typed ............ 3
-requests fired immediately .. 0     <- the timer was still pending
-requests fired after 4 s .... 1     GET /api/products/search?q=lap -> 200
-console errors .............. 0
+Edit button (event delegation) -> form filled: "Editing product #1", id=1, €1,299.90
+Cancel                        -> back to "New product"
+Create form                   -> 4 cards, "Product created successfully", €12.50
+Delete button + confirm       -> 3 cards, "Product deleted successfully"
 ```
-
-The table was filtered down to the single matching product.
 
 ### 9.5 The SQL that Hibernate really generates
 
@@ -433,3 +505,245 @@ create table products (
     primary key (id)
 );
 ```
+
+### 9.7 The container stack, measured
+
+`docker build` and `docker compose up -d --build` were actually executed:
+
+```
+#12 [build 4/6] RUN mvn -B -q dependency:go-offline          DONE 43.7s
+#16 [build 6/6] RUN mvn -B -q clean package -DskipTests      DONE 12.9s
+#18 exporting to image                                       DONE  5.6s
+
+NAME           STATUS                    PORTS
+products-api   Up 31 seconds (healthy)   0.0.0.0:8080->8080/tcp
+products-db    Up 37 seconds (healthy)   0.0.0.0:5433->5432/tcp
+```
+
+The two healthchecks turned `healthy`, which proves that the API reached PostgreSQL
+through the internal DNS name `postgres` and not through `localhost`.
+
+### 9.8 The refactored frontend, measured in a real browser
+
+After moving the JavaScript into `frontend/src/`, every module was requested over HTTP
+and the whole CRUD was exercised again from the browser:
+
+```
+GET /                       200
+GET /src/main.js            200
+GET /src/api/products.js    200
+GET /src/ui/productGrid.js  200
+
+cards rendered .............. 3     (counter = 3)
+Edit button (event delegation) filled the form with id=1, price=1299.9
+POST via the form ........... card count 4, message "Product created successfully"
+DELETE via the delegated button + confirm ... card count back to 3
+console errors .............. 0
+```
+
+---
+
+## 10. Docker
+
+### 10.1 The Dockerfile (multi-stage)
+
+```dockerfile
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+WORKDIR /build
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q clean package -DskipTests
+
+FROM eclipse-temurin:21-jre-alpine
+RUN addgroup -S spring && adduser -S spring -G spring
+WORKDIR /app
+USER spring
+COPY --from=build /build/target/products-api-1.0.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]
+```
+
+Three optimisations worth explaining in the defence:
+
+| Decision | Why |
+|---|---|
+| Two stages | The final image has **no Maven, no JDK and no source code**, only the JRE and the `.jar`. It goes from ~600 MB to ~180 MB. |
+| `COPY pom.xml` before `COPY src` | Docker caches layers. Dependencies are downloaded again **only** when `pom.xml` changes, not on every code edit. |
+| Non-root user (`USER spring`) | If the process is compromised it cannot write to the filesystem or run as root. |
+| `-XX:MaxRAMPercentage=75.0` | The JVM sizes its heap from the **container** limit instead of the host RAM, which avoids the OOM killer. |
+
+`.dockerignore` keeps `target/`, `.git/`, `frontend/`, the README and the private study
+guide out of the build context.
+
+### 10.2 The compose stack
+
+`docker-compose.yml` declares two services and one network:
+
+```
+                     products-network (bridge, internal DNS)
+   ┌───────────────────────────────┐        ┌──────────────────────────────┐
+   │           api                 │        │          postgres            │
+   │  products-api:1.0.0           │  TCP   │  postgres:16-alpine          │
+   │  :8080  ──────────────────────┼───────>│  :5432                       │
+   └───────────────────────────────┘        └──────────────────────────────┘
+              │                                          │
+        host :8080                                host :5433
+                                                    (volume postgres_data)
+```
+
+Two details that are easy to get wrong:
+
+1. **The host is `postgres`, not `localhost`.** Inside a container, `localhost` is that
+   same container. Docker's internal DNS resolves the *service name* to the IP of the
+   other container, so the JDBC URL is `jdbc:postgresql://postgres:5432/products_db`.
+2. **`depends_on: condition: service_healthy`.** A plain `depends_on` only waits for the
+   container to be *created*, not for PostgreSQL to accept connections. With the
+   `pg_isready` healthcheck, the API starts only when the database is really ready.
+
+### 10.3 Why the environment variables work
+
+Spring Boot implements **relaxed binding** for environment variables:
+
+```
+SPRING_DATASOURCE_URL       ->  spring.datasource.url
+SPRING_DATASOURCE_USERNAME  ->  spring.datasource.username
+SPRING_JPA_HIBERNATE_DDL_AUTO ->  spring.jpa.hibernate.ddl-auto
+```
+
+Upper case, dots replaced by underscores. That is why the image can be configured
+without touching `application.properties` and without rebuilding it.
+
+---
+
+## 11. CI/CD with GitHub Actions
+
+`.github/workflows/ci-cd.yml` runs on every `push` and every `pull_request` targeting
+`main` or `dev`:
+
+```
+push / pull_request  ──>  job "test"  ──(needs)──>  job "package"
+                          checkout                    checkout
+                          setup-java 21 + cache       setup-java 21 + cache
+                          mvn test                    mvn clean package -DskipTests
+                          upload surefire-reports     upload products-api-jar
+```
+
+| Concept | Meaning in this project |
+|---|---|
+| **Workflow** | The YAML file. Here: `CI/CD`. |
+| **Event** (`on`) | `push` and `pull_request` filtered by branch. |
+| **Job** | `test` and `package`, each on a fresh virtual machine. |
+| **Runner** | `ubuntu-latest`, provided by GitHub. |
+| **Step** | One command: `uses:` for a reusable action, `run:` for a shell command. |
+| **Action** | `actions/checkout@v4`, `actions/setup-java@v4`, `actions/upload-artifact@v4`. |
+| **Artifact** | The `.jar` and the test reports, downloadable from the run page. |
+| **`needs: test`** | `package` does not start if the tests fail. |
+
+No database service is needed: the service tests mock the repository with Mockito and
+the controller tests use `@WebMvcTest` + MockMvc, so they never open a connection.
+
+Why `-DskipTests` in the packaging job is not cheating: `needs: test` already guarantees
+that the same commit passed the suite, and running it twice would only waste minutes.
+
+> **Where the "CD" part goes:** a third job would build and push the Docker image to a
+> registry and deploy it. It is deliberately left out because it needs credentials and a
+> real server; a fake deploy step is worse than an honest gap.
+
+---
+
+## 12. The user interface (Tailwind CSS)
+
+### 12.1 Why the CDN is pinned
+
+```html
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+```
+
+`https://cdn.tailwindcss.com` alone always serves the newest build, so the design could
+change between two runs of the same commit. Pinning `3.4.17` makes the page
+reproducible. The Play CDN compiles the classes **in the browser**, which is perfect for
+a class project and wrong for production: a real deployment pre-compiles Tailwind with
+Vite/PostCSS and ships a plain `.css` file.
+
+### 12.2 The strict grid
+
+```html
+<section id="productGrid"
+         class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+```
+
+| Class | What it does | Breakpoint |
+|---|---|---|
+| `grid` | Turns the container into a CSS grid (`display: grid`). | always |
+| `grid-cols-1` | `grid-template-columns: repeat(1, minmax(0, 1fr))` — 1 column. | `0 px` |
+| `sm:grid-cols-2` | The same with 2 columns. | `≥ 640 px` |
+| `lg:grid-cols-3` | The same with 3 columns — the desktop layout. | `≥ 1024 px` |
+| `gap-6` | `gap: 1.5rem` between cards, horizontally and vertically. | always |
+
+Tailwind is **mobile first**: the unprefixed class applies to every width, and each
+`sm:` / `lg:` variant only overrides it from its breakpoint upwards. That is why the
+order is `1 → 2 → 3` and not `3 → 2 → 1`.
+
+`minmax(0, 1fr)` matters: with plain `1fr` a grid item refuses to shrink below its
+content (a long product name would blow the column up). `minmax(0, …)` allows it.
+
+### 12.3 The card
+
+```html
+<article class="group flex flex-col justify-between rounded-2xl border border-slate-200
+                bg-white p-5 shadow-sm transition duration-200
+                hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg">
+    ...
+    <div class="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <span class="text-lg font-bold tracking-tight text-slate-900">€1,299.90</span>
+        <button data-action="edit" data-id="1" class="...">Edit</button>
+        <button data-action="delete" data-id="1" class="...">Delete</button>
+    </div>
+</article>
+```
+
+`flex flex-col justify-between` is what makes every card the same height with the price
+pinned to the bottom, even when one description is two lines longer than another: the
+grid stretches all items of a row, and `justify-between` pushes the footer down.
+
+`line-clamp-3` truncates a long description with an ellipsis after three lines.
+
+### 12.4 The instant filter
+
+```js
+function filterProducts(products, term) {
+    const needle = term.trim().toLowerCase();
+    if (needle === '') return products;                    // empty search -> everything
+    return products.filter((p) => p.name.toLowerCase().includes(needle));
+}
+
+searchInput.addEventListener('input', () => handlers.onSearch(getSearchTerm()));
+```
+
+Three decisions behind it:
+
+1. **Client-side, not server-side.** The full list is read once and kept in the
+   `allProducts` array. Filtering that array is a few microseconds; a request is tens of
+   milliseconds at best. For a few hundred products the network is pure latency.
+2. **No debounce.** A debounce delays a *side effect* (the request). With no request
+   there is nothing to delay, and adding a timer would only make the UI feel slow.
+3. **`filter` returns a new array.** `allProducts` is never mutated, so the next
+   keystroke still filters the complete list instead of the previous result.
+
+When the dataset grows past what fits in memory, this design has to change: paginate on
+the server and go back to `GET /api/products/search?q=` (which is exactly why that
+endpoint still exists).
+
+### 12.5 Why Tailwind instead of a CSS file
+
+The previous version had `src/styles/main.css` with hand-written selectors
+(`.card h2`, `td.actions button`, …). Tailwind replaces it because:
+
+- The design lives **next to the markup** it styles, so a class and the element it
+  affects are never in two different files.
+- Deleting a card deletes its styles, so dead CSS cannot accumulate.
+- Responsive behaviour (`sm:`, `lg:`) is a prefix, not a second file with media queries.
+
+The trade-off is a long `class` attribute. That is why the card's class list and the
+message colour variants are kept in constants at the top of `ui/productGrid.js`.

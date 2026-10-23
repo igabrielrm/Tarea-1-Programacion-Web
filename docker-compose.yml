@@ -1,42 +1,99 @@
 # =====================================================================================
-#  POSTGRESQL DATABASE WITH DOCKER
+#  DOCKER COMPOSE - PostgreSQL + Spring Boot API
 #
-#  If you do not have PostgreSQL installed on Windows, this brings the database
-#  up in 10 seconds with the command:
-#      docker compose up -d
+#  Two containers that talk to each other over a private network:
 #
-#  The API then connects using EXACTLY the values in application.properties:
-#      host     = localhost
-#      port     = 5432
-#      user     = postgres
-#      password = postgres
-#      database = products_db
+#      docker compose up -d --build     start the database and the API
+#      docker compose logs -f api       follow the API logs
+#      docker compose ps                see the state (healthy / starting)
+#      docker compose down              stop everything
+#      docker compose down -v           stop AND delete the data volume
+#
+#  From the host, the API answers on http://localhost:8080 and PostgreSQL on
+#  http://localhost:5433 (port chosen so it does not clash with a local installation).
 # =====================================================================================
 
 services:
+
+  # -----------------------------------------------------------------------------------
+  #  DATABASE
+  # -----------------------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine          # PostgreSQL 16 (lightweight image)
-    container_name: products-db        # Readable name for the container
-    restart: unless-stopped            # It restarts on its own if the machine reboots
+    image: postgres:16-alpine
+    container_name: products-db
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: products_db          # Creates the "products_db" database on startup
-      POSTGRES_USER: postgres           # Creates the "postgres" user
-      POSTGRES_PASSWORD: postgres       # Password: "postgres" (change it if you want)
+      POSTGRES_DB: products_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      # Host port -> container port.
-      # By default it is 5432 (the standard PostgreSQL port).
-      # If you already have PostgreSQL installed and running on your PC, it takes 5432:
-      #   POSTGRES_PORT=5433 docker compose up -d
-      # and then in application.properties:
-      #   spring.datasource.url=jdbc:postgresql://localhost:5433/products_db
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Host port : container port.
+      # The container always listens on 5432 inside its own network; only the left
+      # value can be changed. It defaults to 5433 because this machine already has a
+      # local PostgreSQL 18 owning 5432. Override it with the POSTGRES_PORT variable.
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data   # The data survives even if the container is deleted
+      # Named volume: the data survives "docker compose down" and container rebuilds.
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
+      # pg_isready answers only when PostgreSQL is really accepting connections.
+      # The API waits for this before starting (see depends_on below).
       test: ["CMD-SHELL", "pg_isready -U postgres -d products_db"]
-      interval: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - products-network
+
+  # -----------------------------------------------------------------------------------
+  #  API  (built from the Dockerfile in this same folder)
+  # -----------------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: products-api:1.0.0
+    container_name: products-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # "service_healthy" waits for the healthcheck above. A simple "depends_on"
+        # would only wait for the container to be CREATED, not for PostgreSQL to be
+        # ready, and the API would crash on the first JDBC connection attempt.
+        condition: service_healthy
+    environment:
+      # Spring Boot maps SPRING_DATASOURCE_URL to spring.datasource.url automatically
+      # (relaxed binding), so application.properties does not need to be edited.
+      #
+      # IMPORTANT: the host is "postgres", the NAME OF THE SERVICE, not localhost.
+      # Inside the compose network Docker runs an internal DNS that resolves every
+      # service name to the IP of its container.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/products_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_SQL_INIT_MODE: always
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      # busybox wget (already present in the Alpine image) checks that the API answers.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/products || exit 1"]
+      interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 40s
+    networks:
+      - products-network
 
+# -------------------------------------------------------------------------------------
+#  RESOURCES
+# -------------------------------------------------------------------------------------
 volumes:
-  postgres_data:                      # Named volume used to persist the data
+  postgres_data:
+
+networks:
+  products-network:
+    # Bridge network: the containers can reach each other by service name, but they
+    # are isolated from the rest of the host.
+    driver: bridge
