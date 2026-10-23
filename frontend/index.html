@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Products CRUD - Vanilla JS + Spring Boot</title>
 
+    <!-- Empty favicon: avoids the 404 noise in the console. -->
+    <link rel="icon" href="data:,">
+
     <!--
         Tailwind CSS through the official Play CDN.
         The version is pinned on purpose: "cdn.tailwindcss.com" alone always serves the
@@ -29,14 +32,27 @@
             </p>
         </div>
 
-        <span class="inline-flex w-fit items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-            REST API connected
-        </span>
+        <div class="flex flex-wrap items-center gap-3">
+            <span class="inline-flex w-fit items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                REST API connected
+            </span>
+
+            <!-- Navigation between the two pages of the project. -->
+            <nav class="flex items-center gap-2" aria-label="Pages">
+                <a href="index.html" aria-current="page"
+                   class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2">
+                    Products
+                </a>
+                <a href="page2.html"
+                   class="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    Pokédex
+                </a>
+            </nav>
+        </div>
     </header>
 
-    <!-- ===================== CREATE / EDIT FORM ===================== -->
-    <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <!-- ===================== CREATE / EDIT FORM ===================== -->    <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-3">
             <h2 id="formTitle" class="text-lg font-semibold text-slate-900">New product</h2>
 
