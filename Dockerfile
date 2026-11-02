@@ -51,7 +51,32 @@ COPY --from=build /build/target/products-api-1.0.0.jar app.jar
 # Documentation only: it does not publish the port by itself, "docker run -p" does.
 EXPOSE 8080
 
-# MaxRAMPercentage: the JVM reads the memory limit of the container and uses at most
-# 75% of it for the heap. Without it the JVM guesses based on the HOST RAM, which is a
-# classic source of "the container was killed by the OOM killer" in production.
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]
+# -------------------------------------------------------------------------------------
+#  RUNTIME MEMORY  (the -Xms / -Xmx flags of the JVM)
+#
+#  The target machine is a t3.micro: 1 GB of RAM for the WHOLE instance, which has to
+#  feed the operating system, PostgreSQL and the JVM at the same time.
+#
+#  JAVA_OPTS is defined here with a sane default so the image is self-sufficient, and
+#  docker-compose.yml overrides it with the value used in production.
+#
+#    -Xms128m = initial heap. Reserving 128 MB at startup stops the JVM from growing the
+#               heap step by step under the first requests (that growth is what makes a
+#               small instance look "frozen" during a demo).
+#    -Xmx384m = maximum heap. The JVM is never allowed to reserve more than 384 MB of
+#               heap, so it can never ask the kernel for memory that is not there and
+#               get itself killed by the OOM killer.
+#
+#  Why NOT -XX:MaxRAMPercentage (used in the previous version)? Because it depends on a
+#  memory limit declared for the container. With no limit it reads the RAM of the HOST
+#  and, at 75 %, would reserve 768 MB of heap on a 1 GB instance, leaving almost nothing
+#  for PostgreSQL and the kernel. An explicit -Xmx is deterministic and does not change
+#  depending on how the container was started.
+# -------------------------------------------------------------------------------------
+ENV JAVA_OPTS="-Xms128m -Xmx384m"
+
+# Shell form with "exec" instead of the JSON array form, on purpose:
+#   - the JSON array form does NOT expand variables, so $JAVA_OPTS would be ignored;
+#   - "exec" replaces the shell with the JVM, so java becomes PID 1 and receives the
+#     SIGTERM sent by "docker compose down", which allows a graceful shutdown.
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

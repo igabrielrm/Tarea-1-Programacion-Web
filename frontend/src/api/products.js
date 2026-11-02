@@ -2,8 +2,9 @@
  *  api/products.js - HTTP layer (the ONLY file allowed to call fetch)
  *
  *  Responsibility: talk to the Spring Boot REST API and return plain JavaScript
- *  objects. Nothing in this file touches the DOM (no document, no window), so it can
- *  be reused, unit-tested or even moved to Node.js without changes.
+ *  objects. Nothing in this file touches the DOM, so it can be reused or unit-tested
+ *  without a browser. The single browser API it reads is `window.location`, and only
+ *  to find out WHERE the page is running (see API_BASE_URL below).
  *
  *  Every exported function maps to exactly one endpoint of ProductController:
  *      getProducts()      ->  GET    /api/products
@@ -14,8 +15,28 @@
  *      deleteProduct()    ->  DELETE /api/products/{id}
  * ===================================================================================== */
 
-// Base URL of the API. NOTE: this is the BACKEND origin (localhost:8080), not the frontend one.
-const API_BASE_URL = 'http://localhost:8080/api/products';
+/* -------------------------------------------------------------------------------------
+ *  BASE URL OF THE API - built at runtime, never hardcoded
+ *
+ *  `window.location.hostname` is the host the page was loaded from:
+ *      - "localhost" or "127.0.0.1" when the frontend runs on your machine,
+ *      - "54.12.34.56" (or your domain) when the page is served from the EC2 instance.
+ *
+ *  Because the browser already knows where it is, ONE file works in both places with
+ *  no rebuild and no hardcoded IP. This is what kills the "localhost trap": a URL
+ *  pointing to localhost always means "the machine of the visitor", so on a remote
+ *  server it would point to the server itself and never to the developer's laptop.
+ *
+ *  The protocol is reused too, so an HTTPS page calls an HTTPS API and the browser
+ *  does not block the request as "mixed content". (On file:// modules do not run at
+ *  all, so serving the folder over HTTP is still required.)
+ * ------------------------------------------------------------------------------------- */
+
+// Port where the Spring Boot API is published by Docker Compose (host port 8080).
+const API_PORT = 8080;
+
+// Example result on the EC2 instance: "http://54.12.34.56:8080/api/products"
+const API_BASE_URL = `${window.location.protocol}//${window.location.hostname}:${API_PORT}/api/products`;
 
 /**
  * Performs an HTTP request against the API and returns the body already parsed as JSON.

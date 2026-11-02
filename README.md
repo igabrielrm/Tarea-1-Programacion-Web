@@ -85,7 +85,7 @@ spring.datasource.password=YOUR_REAL_PASSWORD
 Since your local PostgreSQL already takes port 5432, the container is published on 5433:
 
 ```bash
-docker compose up -d postgres
+docker compose up -d products-db
 ```
 
 And in `application.properties`:
@@ -194,7 +194,9 @@ curl -X POST http://localhost:8080/api/products \
 ### 5.1 Read — `GET /api/products`
 
 ```
-1. BROWSER          The JavaScript calls fetch("http://localhost:8080/api/products")
+1. BROWSER          The JavaScript calls fetch(`${location.protocol}//${location.hostname}:8080/api/products`)
+                    (the host is taken from the page, never hardcoded: it works on
+                     localhost and on the public IP of the EC2 instance alike)
         |
         |  (For POST/PUT/DELETE the browser first sends an extra OPTIONS request,
         |   the so-called "preflight": the backend answers 200 with the CORS headers
@@ -333,11 +335,22 @@ Everything lives in `config/CorsConfig.java` + the `app.cors.allowed-origins` pr
 
 ```java
 registry.addMapping("/api/**")
-        .allowedOrigins(allowedOrigins)
+        .allowedOriginPatterns(allowedOriginPatterns)
         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
         .allowedHeaders("*")
         .allowCredentials(true)
         .maxAge(3600);
+```
+
+`allowedOriginPatterns` (instead of `allowedOrigins`) is what makes the deployment
+possible: it accepts wildcards and exact values, and it is the only variant that works
+with `allowCredentials(true)` when the value is `*`.
+
+The property falls back to the local origins and can be overridden without rebuilding
+the image:
+
+```properties
+app.cors.allowed-origins=${APP_CORS_ALLOWED_ORIGINS:http://localhost:5500,http://127.0.0.1:5500,http://localhost:3000,http://localhost:8081,http://localhost:5173}
 ```
 
 > **If the project used Spring Security**, the correct approach would be to define a
@@ -561,7 +574,8 @@ WORKDIR /app
 USER spring
 COPY --from=build /build/target/products-api-1.0.0.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/app.jar"]
+ENV JAVA_OPTS="-Xms128m -Xmx384m"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 ```
 
 Three optimisations worth explaining in the defence:
@@ -571,7 +585,8 @@ Three optimisations worth explaining in the defence:
 | Two stages | The final image has **no Maven, no JDK and no source code**, only the JRE and the `.jar`. It goes from ~600 MB to ~180 MB. |
 | `COPY pom.xml` before `COPY src` | Docker caches layers. Dependencies are downloaded again **only** when `pom.xml` changes, not on every code edit. |
 | Non-root user (`USER spring`) | If the process is compromised it cannot write to the filesystem or run as root. |
-| `-XX:MaxRAMPercentage=75.0` | The JVM sizes its heap from the **container** limit instead of the host RAM, which avoids the OOM killer. |
+| `-Xms128m -Xmx384m` | Explicit, deterministic heap limits. The previous `-XX:MaxRAMPercentage=75.0` reads the **host** RAM when the container declares no memory limit: on a 1 GB instance that means a 768 MB heap and an immediate OOM kill. |
+| `sh -c "exec java $JAVA_OPTS ..."` | The JSON form does **not** expand variables, so `$JAVA_OPTS` would be ignored. `exec` makes `java` PID 1, so it receives the `SIGTERM` from `docker compose down` and shuts down gracefully. |
 
 `.dockerignore` keeps `target/`, `.git/`, `frontend/`, the README and the private study
 guide out of the build context.
@@ -583,7 +598,7 @@ guide out of the build context.
 ```
                      products-network (bridge, internal DNS)
    ┌───────────────────────────────┐        ┌──────────────────────────────┐
-   │           api                 │        │          postgres            │
+   │           api                 │        │        products-db           │
    │  products-api:1.0.0           │  TCP   │  postgres:16-alpine          │
    │  :8080  ──────────────────────┼───────>│  :5432                       │
    └───────────────────────────────┘        └──────────────────────────────┘
@@ -594,12 +609,15 @@ guide out of the build context.
 
 Two details that are easy to get wrong:
 
-1. **The host is `postgres`, not `localhost`.** Inside a container, `localhost` is that
+1. **The host is `products-db`, not `localhost`.** Inside a container, `localhost` is that
    same container. Docker's internal DNS resolves the *service name* to the IP of the
-   other container, so the JDBC URL is `jdbc:postgresql://postgres:5432/products_db`.
+   other container, so the JDBC URL is `jdbc:postgresql://products-db:5432/products_db`.
 2. **`depends_on: condition: service_healthy`.** A plain `depends_on` only waits for the
    container to be *created*, not for PostgreSQL to accept connections. With the
    `pg_isready` healthcheck, the API starts only when the database is really ready.
+3. **Memory limits for a 1 GB instance.** `JAVA_OPTS="-Xmx384m -Xms128m"` caps the JVM
+   heap, PostgreSQL runs with `shared_buffers=64MB` and `max_connections=30`, and the
+   Hikari pool is reduced to 5 connections.
 
 ### 10.3 Why the environment variables work
 
@@ -747,3 +765,177 @@ The previous version had `src/styles/main.css` with hand-written selectors
 
 The trade-off is a long `class` attribute. That is why the card's class list and the
 message colour variants are kept in constants at the top of `ui/productGrid.js`.
+
+---
+
+## 13. Deploying on AWS EC2 (1 GB instance)
+
+The project also has to run on a `t3.micro`: **1 GB of RAM** shared by the operating
+system, PostgreSQL and the JVM. That constraint produced two independent failures, and
+this section documents both.
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| The frontend loads but every request fails | `http://localhost:8080` hardcoded in `api/products.js` | Build the URL from `window.location.hostname` |
+| The browser blocks the response | CORS only allowed `localhost` | Configurable `APP_CORS_ALLOWED_ORIGINS` + `allowedOriginPatterns` |
+| The API container dies seconds after starting | The JVM requested more RAM than the instance has (**OOM**) | `-Xmx384m -Xms128m` |
+| The API cannot reach the database | `SPRING_DATASOURCE_URL` pointed to `localhost` | Use the service name: `products-db` |
+
+### 13.1 The API URL is built at runtime
+
+```js
+// frontend/src/api/products.js
+const API_PORT = 8080;
+const API_BASE_URL = `${window.location.protocol}//${window.location.hostname}:${API_PORT}/api/products`;
+```
+
+`localhost` does not mean "my computer": it means **the machine where the browser is
+running**. On the EC2 instance that is the server itself, never the developer's laptop.
+`window.location.hostname` is resolved by the browser at runtime, so one file works
+everywhere without a rebuild:
+
+| Page opened at | Base URL produced |
+|---|---|
+| `http://localhost:5500` | `http://localhost:8080/api/products` |
+| `http://127.0.0.1:5500` | `http://127.0.0.1:8080/api/products` |
+| `http://54.12.34.56:5500` | `http://54.12.34.56:8080/api/products` |
+
+Reusing `window.location.protocol` also avoids mixed content if the page is ever served
+over HTTPS. The limitation is that the API must live on the same host as the frontend;
+if it ever moves to another domain, the URL has to come from configuration or from a
+reverse proxy instead.
+
+### 13.2 JVM memory: `-Xmx` / `-Xms` instead of `-XX:MaxRAMPercentage`
+
+The old entrypoint used `-XX:MaxRAMPercentage=75.0`. That flag sizes the heap from the
+memory **available to the container**, and when no `mem_limit` is declared it reads the
+**host** RAM: 75 % of 1 GB = a **768 MB heap**. Add metaspace, JIT code cache and thread
+stacks (~170 MB) plus PostgreSQL and the kernel, and the OOM killer terminates the
+process. Docker reports it as `Exited (137)` because `137 = 128 + 9` (`SIGKILL`).
+
+```dockerfile
+ENV JAVA_OPTS="-Xms128m -Xmx384m"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-Xms128m` | Initial heap. The JVM starts small and does not grow incrementally under the first requests. |
+| `-Xmx384m` | Hard ceiling for the heap. It can never ask the kernel for more than that. |
+
+The budget for a 1 GB instance:
+
+```text
+1024 MB  total
+- 200 MB  operating system
+- 120 MB  PostgreSQL (shared_buffers 64 MB + connections)
+- 170 MB  outside the heap (metaspace, JIT, threads, GC)
+= 534 MB  available for the heap
+- 384 MB  -Xmx  ->  ~150 MB of headroom
+```
+
+`-Xmx` caps the **heap only**, not the whole process. Self-imposed limits are also worth
+knowing: `mem_limit` in Compose caps the whole container through cgroups, and
+`-XX:+ExitOnOutOfMemoryError` makes the JVM exit so `restart: unless-stopped` brings it
+back instead of leaving a broken process alive.
+
+Two extra memory savings were applied: PostgreSQL runs with `shared_buffers=64MB` and
+`max_connections=30`, and Hikari was reduced to 5 connections
+(`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=5`), because every idle connection is a
+PostgreSQL backend process costing RAM on the server side.
+
+### 13.3 Why the JDBC URL uses `products-db` and not `localhost`
+
+Each container has its own loopback interface. `localhost` inside the `api` container
+points to the `api` container itself, where no PostgreSQL is listening. Docker's embedded
+DNS (on `127.0.0.11`) resolves **service names** to the internal IP of their containers:
+
+```yaml
+SPRING_DATASOURCE_URL: jdbc:postgresql://products-db:5432/products_db
+#                                     ^^^^^^^^^^^ service name, not localhost
+```
+
+Verified from inside the container:
+
+```text
+docker exec products-api sh -c "getent hosts products-db"
+172.27.0.2        products-db  products-db
+```
+
+The rule is: **another container → service name; the same container → `localhost`**. That
+is why the healthcheck is correct with `localhost`, because `wget` runs inside the API
+container and calls the API of that same container.
+
+Ports follow the same two-sided logic. `5432` is always the container port; `5433` is the
+host port chosen to avoid clashing with a local PostgreSQL 18 installation. The API always
+uses the internal one.
+
+### 13.4 CORS for an origin that is unknown at build time
+
+Fixing the URL is not enough: `http://<ip>:5500` and `http://<ip>:8080` are different
+origins, so the browser sends a preflight and the API has to allow it. The origin list is
+now overridable from the environment:
+
+```yaml
+APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-*}
+```
+
+`CorsConfig` uses `allowedOriginPatterns` because `allowedOrigins` rejects `"*"` when
+`allowCredentials(true)` is set (it throws at startup). For a public, stateless API that
+does not use cookies, `*` is a deliberate trade-off; in a real system the exact origin is
+pinned instead: `APP_CORS_ALLOWED_ORIGINS="https://my-app.example.com"`.
+
+Verified with a simulated remote origin:
+
+```text
+GET  /api/products  Origin: http://54.12.34.56:5500
+  -> 200, 3 products, Access-Control-Allow-Origin: http://54.12.34.56:5500
+
+OPTIONS /api/products (preflight)
+  -> 200, Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS
+```
+
+### 13.5 Deployment checklist
+
+```text
+1. Security Group inbound:  22 (SSH)  |  8080 (API)  |  5500 (frontend)
+                            do NOT expose 5433: the database only talks over the
+                            internal Docker network
+
+2. Install Docker + Compose on the instance
+
+3. git clone ... && cd productos-api
+   (optional) cp .env.example .env   -> ports and CORS
+
+4. docker compose up -d --build
+   docker compose ps                 -> both services "healthy"
+
+5. Serve the frontend (file:// does not work with ES modules):
+     cd frontend
+     python3 -m http.server 5500 --bind 0.0.0.0
+   --bind 0.0.0.0 is required; 127.0.0.1 would only accept requests from the
+   instance itself
+
+6. curl http://localhost:8080/api/products
+   open  http://<PUBLIC-IP>:5500/index.html  -> 3 product cards
+```
+
+Without an **Elastic IP** the public address changes on every stop/start. The dynamic URL
+survives that automatically, but the address you type in the browser does not.
+
+### 13.6 Measured result
+
+```text
+products-api   Up (healthy)      271 MiB
+products-db    Up (healthy)       38 MiB
+──────────────────────────────────────────
+total                            ~310 MiB of 1024 MiB
+```
+
+```text
+docker exec products-api sh -c "tr '\0' ' ' < /proc/1/cmdline"
+java -Xmx384m -Xms128m -jar /app/app.jar      <-- the flags really applied
+
+mvn test                                      24/24 tests passing
+frontend                                      3 cards, CORS accepted, 0 console errors
+```

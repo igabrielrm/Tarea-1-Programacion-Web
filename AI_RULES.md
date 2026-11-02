@@ -237,8 +237,9 @@ Run through this before declaring any task done:
 | API base path | `/api/products` |
 | Backend port | `8080` |
 | Frontend demo port | `5500` (Live Server, serves `frontend/`) |
-| Docker | `Dockerfile` (multi-stage) + `docker-compose.yml` (postgres + api) |
+| Docker | `Dockerfile` (multi-stage) + `docker-compose.yml` (products-db + api) |
 | Published host ports | `8080` (API) · `5433` (PostgreSQL) |
+| JVM memory | `JAVA_OPTS="-Xmx384m -Xms128m"` (1 GB cloud instance) |
 | CI/CD | `.github/workflows/ci-cd.yml` (GitHub Actions) |
 | Private study guide | `guia_estudio_personal.md` (ignored) |
 
@@ -251,8 +252,14 @@ mvn clean package                # build target/products-api-1.0.0.jar
 docker build -t products-api:1.0.0 .   # build the image only
 docker compose up -d --build     # start PostgreSQL + API
 docker compose logs -f api       # follow the API logs
+docker compose logs -f products-db  # follow the database logs
 docker compose down -v           # stop and delete the data volume
 ```
+
+> **Frontend URL rule:** `frontend/src/api/products.js` builds the API base URL from
+> `window.location` at runtime (`${protocol}//${hostname}:8080/api/products`). Never
+> hardcode `localhost` or an IP: it breaks as soon as the page is served from another
+> machine (AWS EC2).
 
 > **Windows note:** set `JAVA_HOME` per-command if the environment is stale:
 > `$env:JAVA_HOME="C:\Program Files\Java\jdk-21.0.12.1"`
