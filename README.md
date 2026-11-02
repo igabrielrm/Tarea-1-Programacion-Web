@@ -668,7 +668,7 @@ that the same commit passed the suite, and running it twice would only waste min
 > registry and deploy it. It is deliberately left out because it needs credentials and a
 > real server; a fake deploy step is worse than an honest gap.
 
----
+----
 
 ## 12. The user interface (Tailwind CSS)
 
