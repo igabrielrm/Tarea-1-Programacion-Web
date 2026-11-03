@@ -145,6 +145,7 @@ curl http://localhost:8080/api/products
 
 | Method | Route                   | Description              | Response |
 |--------|-------------------------|--------------------------|----------|
+| GET    | `/health`               | Liveness probe (load balancer) | `200` + `{"status":"UP"}` |
 | GET    | `/api/products`         | List all                 | `200` + JSON array |
 | GET    | `/api/products/search?q=` | Search by name         | `200` + JSON array |
 | GET    | `/api/products/{id}`    | Find one                 | `200` + JSON object |
@@ -936,6 +937,148 @@ total                            ~310 MiB of 1024 MiB
 docker exec products-api sh -c "tr '\0' ' ' < /proc/1/cmdline"
 java -Xmx384m -Xms128m -jar /app/app.jar      <-- the flags really applied
 
-mvn test                                      24/24 tests passing
+mvn test                                      26/26 tests passing
 frontend                                      3 cards, CORS accepted, 0 console errors
 ```
+
+---
+
+## 14. Health endpoint, load test and code quality
+
+### 14.1 `GET /health`
+
+```bash
+curl -i http://localhost:8080/health
+```
+
+```http
+HTTP/1.1 200
+Content-Type: application/json;charset=UTF-8
+
+{"status":"UP"}
+```
+
+It lives in `controller/HealthController.java` and answers with the `HealthResponse`
+record. It is intentionally **outside `/api`**: it is not a business resource, and the
+load balancer must not depend on the API prefix.
+
+| Rule | Reason |
+|---|---|
+| No database query | The ALB calls it every 15 s forever. It must cost almost nothing. |
+| No authentication | The load balancer has no user credentials. |
+| No internals in the body | Version numbers or stack traces would leak information to the internet. |
+| Constant answer | Reaching the method already proves Tomcat, Spring MVC and the JVM are alive. |
+
+This is a **liveness** probe. The Docker Compose healthcheck still calls
+`/api/products` on purpose, because that one **does** touch PostgreSQL and therefore acts
+as a *readiness* probe: it verifies that the container can actually serve data.
+
+### 14.2 Load test with k6
+
+`k6-test.js` (project root) runs 50 virtual users for 30 seconds against
+`GET /api/products`, with one second of think time per iteration and three thresholds that
+turn the run into an assertion.
+
+```bash
+k6 run k6-test.js
+
+# against another host (for example the ALB DNS name)
+BASE_URL=http://my-alb-123456.eu-west-1.elb.amazonaws.com k6 run k6-test.js
+```
+
+Measured results on the Docker stack (`products-api` limited to 384 MB of heap):
+
+| Run | avg | med | p(95) | p(99) | iterations | throughput | failed |
+|---|---|---|---|---|---|---|---|
+| 1 (cold JVM) | 117 ms | 27 ms | **529 ms** | 1.26 s | 1332 | 43.3 req/s | 0 % |
+| 2 (warm) | 25.7 ms | 10.3 ms | 124 ms | 187 ms | 1485 | 47.9 req/s | 0 % |
+| 3 (warm) | 18.5 ms | 8.2 ms | 80.9 ms | 140 ms | 1500 | 48.8 req/s | 0 % |
+
+Three lessons that come straight out of this table:
+
+1. **The first run is always slower.** Class loading and JIT compilation happen under
+   load, so p(95) went from 529 ms to 81 ms once the JVM was warm. A load test that
+   reports only the first run is measuring the warm-up, not the API.
+2. **The average hides the tail.** Run 1 had a 27 ms median and a 529 ms p(95): half the
+   requests were instant while the slowest 5 % queued. That is why the threshold uses
+   p(95) and not the average.
+3. **Little's law closes the loop.** 50 VUs × 1.02 s per iteration ≈ 49 iterations/s, which
+   is exactly the 48.8 req/s measured. The system was **not** saturated: the
+   `sleep(1)` think time caps the throughput at 50 req/s. Removing it would show the real
+   ceiling of the 5-connection Hikari pool.
+
+The p(95) threshold is 750 ms, not 500 ms, for a reason: on a 1 GB instance the cold run
+measures 529 ms, so a 500 ms SLO would be a false alarm. The number has to describe the
+capacity the hardware actually has.
+
+### 14.3 ESLint, Prettier and the build chain
+
+| File | Role |
+|---|---|
+| `.eslintrc.json` | ESLint 8 (legacy config): `eslint:recommended` + `eqeqeq`, `no-var`, `prefer-const`, `no-unused-vars`. Applies to `frontend/src/**/*.js` and `k6-test.js`. |
+| `.prettierrc` | Prettier 3: 4-space indent, single quotes, 110 columns, semicolons. |
+| `package.json` | Dev-only scripts and the two devDependencies. The app still has **no build step**. |
+
+```bash
+npm install
+npm run lint          # static analysis
+npm run lint:fix      # fix what can be fixed automatically
+npm run format        # rewrite the files with Prettier
+npm run format:check  # fail if a file is not formatted (used by CI)
+```
+
+ESLint found a real problem during the adoption: `ui/pokeGrid.js` imported `formatLabel`
+without ever using it. That is exactly the class of bug a linter catches and a formatter
+does not — Prettier would have "fixed" the formatting of the dead import and left it there.
+
+The GitHub Actions pipeline now has three jobs: `test` (Maven), `lint` (npm) and
+`package` (`needs: [test, lint]`). A pull request that breaks the style or leaves an
+unused variable cannot produce an artifact.
+
+### 14.4 How the ALB is wired to the health endpoint
+
+```text
+  user ──►  ALB (public subnets, :80/:443)  ──►  target group products-tg
+                    │                               health check: GET /health : 8080
+                    └── only healthy targets ──►    instance i-0abc (api container :8080)
+```
+
+```bash
+aws elbv2 create-target-group \
+  --name products-tg \
+  --protocol HTTP --port 8080 \
+  --target-type instance \
+  --vpc-id vpc-xxxxxxxx \
+  --health-check-path /health \
+  --health-check-interval-seconds 15 \
+  --health-check-timeout-seconds 5 \
+  --healthy-threshold-count 2 \
+  --unhealthy-threshold-count 3 \
+  --matcher HttpCode=200
+```
+
+- The ALB is **layer 7**: it reads the HTTP request and can route by path or host, not
+  just by IP and port.
+- The users only see the ALB DNS name; the instance keeps its port 8080 open **only to
+  the ALB security group**, never to the internet.
+- Two failed checks in a row (2 × 15 s) are enough to remove an instance from rotation,
+  and it comes back only after two consecutive successes.
+
+---
+
+## 15. Next steps: React and Electron
+
+The current frontend is deliberately framework-free. React and Electron are the next two
+steps of the course, and the guide covers the theory in Spanish; the mapping is short:
+
+| Vanilla JS (today) | React (next) |
+|---|---|
+| `buildCard()` returns an HTML string, `innerHTML` parses it | A functional component returns **JSX**, React updates the DOM |
+| State lives in module variables (`results`, `listeners`) | `useState` holds it, and changing it re-renders |
+| Manual re-render after every change | The Virtual DOM diffs old vs new and patches only what changed |
+| `document.getElementById` + delegation | Refs and synthetic events declared in JSX |
+
+Electron wraps the same renderer in a desktop shell: a **main process** (Node.js, owns the
+window and the OS) plus one **renderer process** per window (Chromium, runs the web app),
+with a `preload` bridge for IPC. `electron-builder` turns it into an `.exe`. The Spring
+Boot API stays where it is: the desktop app calls the same REST endpoints.

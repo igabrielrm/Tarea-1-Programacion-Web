@@ -151,12 +151,32 @@ each other. Add `src/styles/` back only for something utilities genuinely cannot
 
 ```text
 frontend/
-├── index.html                  # structure only, loads src/main.js as a module
+├── index.html                  # Page 1: products (loads src/main.js as a module)
+├── page2.html                  # Page 2: Pokédex (loads src/page2.js as a module)
 └── src/
-    ├── api/products.js         # fetch() lives here and nowhere else
-    ├── ui/productGrid.js       # all DOM access lives here (product cards)
-    └── main.js                 # wiring + state (edit mode, search term)
+    ├── api/products.js         # fetch() for the Spring Boot API
+    ├── api/pokeApi.js          # fetch() for PokéAPI (3-endpoint chain)
+    ├── ui/productGrid.js       # product cards + event delegation (Page 1)
+    ├── ui/pokeGrid.js          # Pokémon cards + status bar (Page 2)
+    ├── ui/pokeModal.js         # Pokémon detail modal (Page 2)
+    ├── ui/pokemonMarkup.js     # pure markup builders shared by Page 2
+    ├── ui/domUtils.js          # escapeHtml / formatLabel / setHidden
+    ├── main.js                 # Page 1 wiring + state (edit mode, search term)
+    └── page2.js                # Page 2 wiring + debounce + state
 ```
+
+### Root tooling (development only, never shipped)
+
+```text
+.eslintrc.json      # ESLint: static analysis of frontend/ and k6-test.js
+.prettierrc         # Prettier: code formatting rules
+package.json        # npm scripts (lint, format) and the two devDependencies
+k6-test.js          # load test: 50 virtual users for 30 s against GET /api/products
+```
+
+`node_modules/` is gitignored and excluded from the Docker build context. The
+application itself still has **no build step**: these files only run on a developer
+machine and in CI.
 
 The old `frontend-example/` folder was deleted during this refactor. Do not recreate
 it and do not add `<script src="js/...">` tags: the page loads exactly one module.
@@ -235,6 +255,7 @@ Run through this before declaring any task done:
 | Stack | Java 21 · Spring Boot 3.5.16 · Spring Data JPA · PostgreSQL · Maven |
 | Base package | `com.tienda.products` |
 | API base path | `/api/products` |
+| Health probe | `GET /health` → `200 {"status":"UP"}` (ALB target group) |
 | Backend port | `8080` |
 | Frontend demo port | `5500` (Live Server, serves `frontend/`) |
 | Docker | `Dockerfile` (multi-stage) + `docker-compose.yml` (products-db + api) |
@@ -254,6 +275,10 @@ docker compose up -d --build     # start PostgreSQL + API
 docker compose logs -f api       # follow the API logs
 docker compose logs -f products-db  # follow the database logs
 docker compose down -v           # stop and delete the data volume
+npm install                      # install ESLint + Prettier (dev tooling only)
+npm run lint                     # static analysis of frontend/ and k6-test.js
+npm run format                   # rewrite files with Prettier
+k6 run k6-test.js                # load test: 50 VUs for 30 s
 ```
 
 > **Frontend URL rule:** `frontend/src/api/products.js` builds the API base URL from
