@@ -41,9 +41,16 @@ public class CorsConfig implements WebMvcConfigurer {
      *
      * <p>The array is injected directly because Spring automatically converts a
      * "a,b,c" text into a String[].
+     *
+     * <p><b>Why patterns and not fixed origins?</b> The same image is deployed to
+     * localhost and to the AWS instance, where the frontend is served from an IP that
+     * is not known at build time. {@code allowedOriginPatterns} accepts wildcards
+     * ({@code *}) and, unlike {@code allowedOrigins}, it is compatible with
+     * {@code allowCredentials(true)} when the pattern is "*". An exact value such as
+     * "http://localhost:5500" keeps working unchanged.
      */
     @Value("${app.cors.allowed-origins}")
-    private String[] allowedOrigins;
+    private String[] allowedOriginPatterns;
 
     /**
      * Registers the CORS rules for ALL the endpoints of the API.
@@ -58,7 +65,7 @@ public class CorsConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
 
         registry.addMapping("/api/**")                    // Applies to every route of the API
-                .allowedOrigins(allowedOrigins)           // e.g. http://localhost:5500, http://localhost:3000
+                .allowedOriginPatterns(allowedOriginPatterns) // e.g. http://localhost:5500 or *
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS") // Allowed HTTP methods
                 .allowedHeaders("*")                      // Allowed headers (Content-Type, Authorization...)
                 .allowCredentials(true)                   // Allows sending cookies/credentials

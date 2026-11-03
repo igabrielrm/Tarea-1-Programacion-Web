@@ -84,8 +84,10 @@ public class ProductController {
     /**
      * GET /api/products/search?q=term -> Searches products whose name contains the term.
      *
-     * <p>This is the endpoint behind the search box of the frontend. The frontend
-     * applies a 4 second debounce so the request is only fired once the user stops typing.
+     * <p>It is kept on the server for API consumers and for datasets that no longer fit in
+     * the browser memory. The product page of this project filters in memory (no request
+     * per keystroke); the 4 second debounce belongs to the Pokédex page, which does call
+     * an external API.
      *
      * @param q the text fragment to search for.
      * @return ResponseEntity with status 200 and the JSON array of matching products.

@@ -24,6 +24,12 @@ logs/
 .env
 
 # ============================================================
+#  NODE TOOLING (ESLint / Prettier)
+#  The lockfile IS committed (reproducible installs); the downloaded packages are not.
+# ============================================================
+node_modules/
+
+# ============================================================
 #  PRIVATE STUDY GUIDE - personal notes, never pushed to GitHub
 # ============================================================
 guia_estudio_personal.md

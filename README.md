@@ -3,7 +3,7 @@
 Complete CRUD (GET, POST, PUT, DELETE) over the **Product** entity (`id`, `name`, `description`, `price`),
 organised in layers (Entity → Repository → Service → Controller), with global CORS for a Vanilla JS frontend.
 
-**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven
+**Stack:** Java 21 · Spring Boot 3.5.16 · Spring Data JPA (Hibernate) · PostgreSQL 16 · Maven · Docker · GitHub Actions
 
 ---
 
@@ -12,7 +12,10 @@ organised in layers (Entity → Repository → Service → Controller), with glo
 ```
 products-api/
 ├── pom.xml                                  Dependencies and the Spring Boot version
-├── docker-compose.yml                       Brings PostgreSQL up without installing it
+├── Dockerfile                               Multi-stage image (build + runtime)
+├── .dockerignore                            What never enters the build context
+├── docker-compose.yml                       PostgreSQL + API as two containers
+├── .github/workflows/ci-cd.yml              GitHub Actions pipeline
 ├── http/products-api.http                   Test requests (IntelliJ / VS Code)
 │
 ├── src/main/java/com/tienda/products/
@@ -44,9 +47,13 @@ products-api/
 ├── src/test/java/com/tienda/products/
 │   ├── service/impl/ProductServiceImplTest.java   9 unit tests (Mockito, no database)
 │   └── controller/ProductControllerTest.java      15 web tests (MockMvc, no server)
-└── frontend-example/                        Demo Vanilla JS frontend
-    ├── index.html
-    └── js/{api.js, app.js}
+│
+└── frontend/                                Demo Vanilla JS frontend (ES modules)
+    ├── index.html                           Structure only, loads src/main.js + Tailwind CDN
+    └── src/
+        ├── api/products.js                  HTTP layer: the only file that calls fetch()
+        ├── ui/productGrid.js                View layer: the only file that touches the DOM
+        └── main.js                          Wiring, state (edit mode) and the instant filter
 ```
 
 ---
@@ -73,12 +80,12 @@ spring.datasource.username=postgres
 spring.datasource.password=YOUR_REAL_PASSWORD
 ```
 
-**Option B — Docker (if you do not want to touch your installation):**
+**Option B — Docker, database only (API runs locally with Maven):**
 
-Since your local PostgreSQL already takes port 5432, run the container on another port:
+Since your local PostgreSQL already takes port 5432, the container is published on 5433:
 
 ```bash
-POSTGRES_PORT=5433 docker compose up -d
+docker compose up -d products-db
 ```
 
 And in `application.properties`:
@@ -86,6 +93,18 @@ And in `application.properties`:
 ```properties
 spring.datasource.url=jdbc:postgresql://localhost:5433/products_db
 ```
+
+**Option C — Docker, database + API together (nothing installed locally):**
+
+```bash
+docker compose up -d --build
+```
+
+This builds the image from the `Dockerfile` and starts both containers. The API is on
+`http://localhost:8080`, PostgreSQL on `localhost:5433`, and the API receives its
+connection settings as environment variables (`SPRING_DATASOURCE_URL` → host
+`postgres`, the name of the service), so `application.properties` does not need to be
+edited at all. Details in section 10.
 
 > The `products` table **is created automatically** when the API starts
 > (`spring.jpa.hibernate.ddl-auto=update`), together with 3 sample products (`data.sql`).
@@ -104,7 +123,14 @@ Or from IntelliJ IDEA: right click on `ProductsApiApplication` → *Run*.
 
 ### 2.3 Running the frontend
 
-Open `frontend-example/index.html` with the **Live Server** extension of VS Code (port 5500).
+Serve the `frontend/` folder over HTTP — for example with the **Live Server** extension
+of VS Code (port 5500) — and open `http://localhost:5500`.
+
+> ⚠️ **Do not open `frontend/index.html` by double-clicking it.** The page uses ES
+> modules, and browsers refuse to load modules from a `file://` URL (CORS error). It
+> has to be served by a web server. Any static server works:
+> `python -m http.server 5500 --directory frontend`
+
 If you use another port, add it in `application.properties` → `app.cors.allowed-origins`.
 
 ### 2.4 Checking it
@@ -119,6 +145,7 @@ curl http://localhost:8080/api/products
 
 | Method | Route                   | Description              | Response |
 |--------|-------------------------|--------------------------|----------|
+| GET    | `/health`               | Liveness probe (load balancer) | `200` + `{"status":"UP"}` |
 | GET    | `/api/products`         | List all                 | `200` + JSON array |
 | GET    | `/api/products/search?q=` | Search by name         | `200` + JSON array |
 | GET    | `/api/products/{id}`    | Find one                 | `200` + JSON object |
@@ -168,7 +195,9 @@ curl -X POST http://localhost:8080/api/products \
 ### 5.1 Read — `GET /api/products`
 
 ```
-1. BROWSER          The JavaScript calls fetch("http://localhost:8080/api/products")
+1. BROWSER          The JavaScript calls fetch(`${location.protocol}//${location.hostname}:8080/api/products`)
+                    (the host is taken from the page, never hardcoded: it works on
+                     localhost and on the public IP of the EC2 instance alike)
         |
         |  (For POST/PUT/DELETE the browser first sends an extra OPTIONS request,
         |   the so-called "preflight": the backend answers 200 with the CORS headers
@@ -237,13 +266,25 @@ curl -X POST http://localhost:8080/api/products \
                the Controller answers 201 Created with the JSON of the created product.
 ```
 
-### 5.3 Search — `GET /api/products/search?q=term`
+### 5.3 Search — two different things share the name
 
-The endpoint uses a derived query: `findByNameContainingIgnoreCaseOrderByNameAsc(term)`, which
-Spring Data turns into `SELECT * FROM products WHERE LOWER(name) LIKE LOWER('%term%') ORDER BY name ASC`.
+There are **two** search implementations in this project, and they are not the same:
 
-The frontend applies a **4 second debounce** (see `frontend-example/js/app.js`) so the request is
-only sent once the user stops typing.
+| | Server-side endpoint | Client-side filter (what the UI uses) |
+|---|---|---|
+| Name | `GET /api/products/search?q=` | `filterProducts()` in `frontend/src/main.js` |
+| How | `findByNameContainingIgnoreCaseOrderByNameAsc(term)` → `SELECT ... WHERE LOWER(name) LIKE LOWER('%term%')` | `Array.prototype.filter()` + `String.prototype.includes()` |
+| Network | one request per call | **zero** requests |
+| When it is the right choice | thousands of rows, pagination | the whole list already fits in memory |
+
+The UI loads the full list **once** with `GET /api/products`, keeps it in the
+`allProducts` array and filters that array on every keystroke. That is why the grid
+updates instantly and the Network tab stays silent while typing. The endpoint is kept
+because it is the only viable option the day the list has to be paginated.
+
+The **4 second debounce** described in earlier versions of this README was removed on
+purpose: a debounce exists to protect the server from a request per keystroke, and
+there is no request anymore.
 
 ### 5.4 Errors
 
@@ -295,11 +336,22 @@ Everything lives in `config/CorsConfig.java` + the `app.cors.allowed-origins` pr
 
 ```java
 registry.addMapping("/api/**")
-        .allowedOrigins(allowedOrigins)
+        .allowedOriginPatterns(allowedOriginPatterns)
         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
         .allowedHeaders("*")
         .allowCredentials(true)
         .maxAge(3600);
+```
+
+`allowedOriginPatterns` (instead of `allowedOrigins`) is what makes the deployment
+possible: it accepts wildcards and exact values, and it is the only variant that works
+with `allowCredentials(true)` when the value is `*`.
+
+The property falls back to the local origins and can be overridden without rebuilding
+the image:
+
+```properties
+app.cors.allowed-origins=${APP_CORS_ALLOWED_ORIGINS:http://localhost:5500,http://127.0.0.1:5500,http://localhost:3000,http://localhost:8081,http://localhost:5173}
 ```
 
 > **If the project used Spring Security**, the correct approach would be to define a
@@ -322,12 +374,17 @@ registry.addMapping("/api/**")
 ## 7. Useful commands
 
 ```bash
-mvn spring-boot:run        # Start the API
-mvn test                   # Run the 24 automated tests
-mvn clean package          # Build target/products-api-1.0.0.jar
+mvn spring-boot:run              # Start the API locally
+mvn test                         # Run the 24 automated tests
+mvn clean package                # Build target/products-api-1.0.0.jar
 java -jar target/products-api-1.0.0.jar
-docker compose up -d       # Start PostgreSQL
-docker compose down        # Stop PostgreSQL (keeping the data)
+
+docker build -t products-api:1.0.0 .    # Build the image only
+docker compose up -d --build     # Start PostgreSQL + the API
+docker compose logs -f api       # Follow the API logs
+docker compose ps                # See container status / healthchecks
+docker compose down              # Stop both (keeping the data)
+docker compose down -v           # Stop both and delete the volume
 ```
 
 ---
@@ -342,7 +399,12 @@ docker compose down        # Stop PostgreSQL (keeping the data)
 - **`@Transactional`** with `readOnly = true` on the reads (faster, it does not lock rows).
 - **Global exception handler** so every error leaves as JSON.
 - **Automated tests with Mockito and MockMvc** that need neither a database nor a server.
-- **Debounced search** so typing does not flood the backend with requests.
+- **Instant client-side filtering** so typing never generates a single HTTP request.
+- **Modular frontend** (`api` / `ui` / `main`) with ES modules, so no file mixes HTTP,
+  DOM and orchestration.
+- **Tailwind CSS with a pinned CDN** and a strictly responsive 1 / 2 / 3 column grid.
+- **Multi-stage Dockerfile** and a compose stack with healthchecks.
+- **CI pipeline** that blocks the build when a test fails.
 
 ---
 
@@ -389,18 +451,42 @@ Access-Control-Allow-Credentials: true
 Access-Control-Max-Age: 3600
 ```
 
-### 9.4 The debounce, measured in the browser
+### 9.4 The instant search, measured in the browser
 
-Typing `lap` (3 keystrokes) in the search box and watching the Network tab:
+Typing `l`, `la`, `lap`, `zzz` and then clearing the box. The DOM was read in the
+**same synchronous tick** as the `input` event, with no `await` and no `setTimeout`:
+
+| Typed | Cards in the DOM | Counter | Empty state | API requests |
+|---|---|---|---|---|
+| `l` | 3 | 3 | hidden | 2 |
+| `la` | 1 | 1 | hidden | 2 |
+| `lap` | 1 | 1 | hidden | 2 |
+| `zzz` | 0 | 0 | visible | 2 |
+| *(cleared)* | 3 | 3 | hidden | 2 |
+
+The API request count never moved: **zero requests per keystroke**. The two entries
+were measured once before typing and are the module file (`/src/api/products.js`) plus
+the single initial `GET /api/products`. Console errors: 0.
+
+### 9.4.1 The responsive grid, measured
+
+The whole page was loaded in iframes of fixed width and the computed
+`grid-template-columns` of `#productGrid` was read:
+
+| Viewport | Columns | Tailwind class responsible |
+|---|---|---|
+| `375 px` | 1 | `grid-cols-1` |
+| `800 px` | 2 | `sm:grid-cols-2` |
+| `1440 px` | 3 | `lg:grid-cols-3` |
+
+### 9.4.2 The CRUD still works through the cards
 
 ```
-keystrokes typed ............ 3
-requests fired immediately .. 0     <- the timer was still pending
-requests fired after 4 s .... 1     GET /api/products/search?q=lap -> 200
-console errors .............. 0
+Edit button (event delegation) -> form filled: "Editing product #1", id=1, €1,299.90
+Cancel                        -> back to "New product"
+Create form                   -> 4 cards, "Product created successfully", €12.50
+Delete button + confirm       -> 3 cards, "Product deleted successfully"
 ```
-
-The table was filtered down to the single matching product.
 
 ### 9.5 The SQL that Hibernate really generates
 
@@ -433,3 +519,566 @@ create table products (
     primary key (id)
 );
 ```
+
+### 9.7 The container stack, measured
+
+`docker build` and `docker compose up -d --build` were actually executed:
+
+```
+#12 [build 4/6] RUN mvn -B -q dependency:go-offline          DONE 43.7s
+#16 [build 6/6] RUN mvn -B -q clean package -DskipTests      DONE 12.9s
+#18 exporting to image                                       DONE  5.6s
+
+NAME           STATUS                    PORTS
+products-api   Up 31 seconds (healthy)   0.0.0.0:8080->8080/tcp
+products-db    Up 37 seconds (healthy)   0.0.0.0:5433->5432/tcp
+```
+
+The two healthchecks turned `healthy`, which proves that the API reached PostgreSQL
+through the internal DNS name `postgres` and not through `localhost`.
+
+### 9.8 The refactored frontend, measured in a real browser
+
+After moving the JavaScript into `frontend/src/`, every module was requested over HTTP
+and the whole CRUD was exercised again from the browser:
+
+```
+GET /                       200
+GET /src/main.js            200
+GET /src/api/products.js    200
+GET /src/ui/productGrid.js  200
+
+cards rendered .............. 3     (counter = 3)
+Edit button (event delegation) filled the form with id=1, price=1299.9
+POST via the form ........... card count 4, message "Product created successfully"
+DELETE via the delegated button + confirm ... card count back to 3
+console errors .............. 0
+```
+
+---
+
+## 10. Docker
+
+### 10.1 The Dockerfile (multi-stage)
+
+```dockerfile
+FROM maven:3.9.9-eclipse-temurin-21 AS build
+WORKDIR /build
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q clean package -DskipTests
+
+FROM eclipse-temurin:21-jre-alpine
+RUN addgroup -S spring && adduser -S spring -G spring
+WORKDIR /app
+USER spring
+COPY --from=build /build/target/products-api-1.0.0.jar app.jar
+EXPOSE 8080
+ENV JAVA_OPTS="-Xms128m -Xmx384m"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+```
+
+Three optimisations worth explaining in the defence:
+
+| Decision | Why |
+|---|---|
+| Two stages | The final image has **no Maven, no JDK and no source code**, only the JRE and the `.jar`. It goes from ~600 MB to ~180 MB. |
+| `COPY pom.xml` before `COPY src` | Docker caches layers. Dependencies are downloaded again **only** when `pom.xml` changes, not on every code edit. |
+| Non-root user (`USER spring`) | If the process is compromised it cannot write to the filesystem or run as root. |
+| `-Xms128m -Xmx384m` | Explicit, deterministic heap limits. The previous `-XX:MaxRAMPercentage=75.0` reads the **host** RAM when the container declares no memory limit: on a 1 GB instance that means a 768 MB heap and an immediate OOM kill. |
+| `sh -c "exec java $JAVA_OPTS ..."` | The JSON form does **not** expand variables, so `$JAVA_OPTS` would be ignored. `exec` makes `java` PID 1, so it receives the `SIGTERM` from `docker compose down` and shuts down gracefully. |
+
+`.dockerignore` keeps `target/`, `.git/`, `frontend/`, the README and the private study
+guide out of the build context.
+
+### 10.2 The compose stack
+
+`docker-compose.yml` declares two services and one network:
+
+```
+                     products-network (bridge, internal DNS)
+   ┌───────────────────────────────┐        ┌──────────────────────────────┐
+   │           api                 │        │        products-db           │
+   │  products-api:1.0.0           │  TCP   │  postgres:16-alpine          │
+   │  :8080  ──────────────────────┼───────>│  :5432                       │
+   └───────────────────────────────┘        └──────────────────────────────┘
+              │                                          │
+        host :8080                                host :5433
+                                                    (volume postgres_data)
+```
+
+Two details that are easy to get wrong:
+
+1. **The host is `products-db`, not `localhost`.** Inside a container, `localhost` is that
+   same container. Docker's internal DNS resolves the *service name* to the IP of the
+   other container, so the JDBC URL is `jdbc:postgresql://products-db:5432/products_db`.
+2. **`depends_on: condition: service_healthy`.** A plain `depends_on` only waits for the
+   container to be *created*, not for PostgreSQL to accept connections. With the
+   `pg_isready` healthcheck, the API starts only when the database is really ready.
+3. **Memory limits for a 1 GB instance.** `JAVA_OPTS="-Xmx384m -Xms128m"` caps the JVM
+   heap, PostgreSQL runs with `shared_buffers=64MB` and `max_connections=30`, and the
+   Hikari pool is reduced to 5 connections.
+
+### 10.3 Why the environment variables work
+
+Spring Boot implements **relaxed binding** for environment variables:
+
+```
+SPRING_DATASOURCE_URL       ->  spring.datasource.url
+SPRING_DATASOURCE_USERNAME  ->  spring.datasource.username
+SPRING_JPA_HIBERNATE_DDL_AUTO ->  spring.jpa.hibernate.ddl-auto
+```
+
+Upper case, dots replaced by underscores. That is why the image can be configured
+without touching `application.properties` and without rebuilding it.
+
+---
+
+## 11. CI/CD with GitHub Actions
+
+`.github/workflows/ci-cd.yml` runs on every `push` and every `pull_request` targeting
+`main` or `dev`:
+
+```
+push / pull_request  ──>  job "test"  ──(needs)──>  job "package"
+                          checkout                    checkout
+                          setup-java 21 + cache       setup-java 21 + cache
+                          mvn test                    mvn clean package -DskipTests
+                          upload surefire-reports     upload products-api-jar
+```
+
+| Concept | Meaning in this project |
+|---|---|
+| **Workflow** | The YAML file. Here: `CI/CD`. |
+| **Event** (`on`) | `push` and `pull_request` filtered by branch. |
+| **Job** | `test` and `package`, each on a fresh virtual machine. |
+| **Runner** | `ubuntu-latest`, provided by GitHub. |
+| **Step** | One command: `uses:` for a reusable action, `run:` for a shell command. |
+| **Action** | `actions/checkout@v4`, `actions/setup-java@v4`, `actions/upload-artifact@v4`. |
+| **Artifact** | The `.jar` and the test reports, downloadable from the run page. |
+| **`needs: test`** | `package` does not start if the tests fail. |
+
+No database service is needed: the service tests mock the repository with Mockito and
+the controller tests use `@WebMvcTest` + MockMvc, so they never open a connection.
+
+Why `-DskipTests` in the packaging job is not cheating: `needs: test` already guarantees
+that the same commit passed the suite, and running it twice would only waste minutes.
+
+> **Where the "CD" part goes:** a third job would build and push the Docker image to a
+> registry and deploy it. It is deliberately left out because it needs credentials and a
+> real server; a fake deploy step is worse than an honest gap.
+
+----
+
+## 12. The user interface (Tailwind CSS)
+
+### 12.1 Why the CDN is pinned
+
+```html
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+```
+
+`https://cdn.tailwindcss.com` alone always serves the newest build, so the design could
+change between two runs of the same commit. Pinning `3.4.17` makes the page
+reproducible. The Play CDN compiles the classes **in the browser**, which is perfect for
+a class project and wrong for production: a real deployment pre-compiles Tailwind with
+Vite/PostCSS and ships a plain `.css` file.
+
+### 12.2 The strict grid
+
+```html
+<section id="productGrid"
+         class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+```
+
+| Class | What it does | Breakpoint |
+|---|---|---|
+| `grid` | Turns the container into a CSS grid (`display: grid`). | always |
+| `grid-cols-1` | `grid-template-columns: repeat(1, minmax(0, 1fr))` — 1 column. | `0 px` |
+| `sm:grid-cols-2` | The same with 2 columns. | `≥ 640 px` |
+| `lg:grid-cols-3` | The same with 3 columns — the desktop layout. | `≥ 1024 px` |
+| `gap-6` | `gap: 1.5rem` between cards, horizontally and vertically. | always |
+
+Tailwind is **mobile first**: the unprefixed class applies to every width, and each
+`sm:` / `lg:` variant only overrides it from its breakpoint upwards. That is why the
+order is `1 → 2 → 3` and not `3 → 2 → 1`.
+
+`minmax(0, 1fr)` matters: with plain `1fr` a grid item refuses to shrink below its
+content (a long product name would blow the column up). `minmax(0, …)` allows it.
+
+### 12.3 The card
+
+```html
+<article class="group flex flex-col justify-between rounded-2xl border border-slate-200
+                bg-white p-5 shadow-sm transition duration-200
+                hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg">
+    ...
+    <div class="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <span class="text-lg font-bold tracking-tight text-slate-900">€1,299.90</span>
+        <button data-action="edit" data-id="1" class="...">Edit</button>
+        <button data-action="delete" data-id="1" class="...">Delete</button>
+    </div>
+</article>
+```
+
+`flex flex-col justify-between` is what makes every card the same height with the price
+pinned to the bottom, even when one description is two lines longer than another: the
+grid stretches all items of a row, and `justify-between` pushes the footer down.
+
+`line-clamp-3` truncates a long description with an ellipsis after three lines.
+
+### 12.4 The instant filter
+
+```js
+function filterProducts(products, term) {
+    const needle = term.trim().toLowerCase();
+    if (needle === '') return products;                    // empty search -> everything
+    return products.filter((p) => p.name.toLowerCase().includes(needle));
+}
+
+searchInput.addEventListener('input', () => handlers.onSearch(getSearchTerm()));
+```
+
+Three decisions behind it:
+
+1. **Client-side, not server-side.** The full list is read once and kept in the
+   `allProducts` array. Filtering that array is a few microseconds; a request is tens of
+   milliseconds at best. For a few hundred products the network is pure latency.
+2. **No debounce.** A debounce delays a *side effect* (the request). With no request
+   there is nothing to delay, and adding a timer would only make the UI feel slow.
+3. **`filter` returns a new array.** `allProducts` is never mutated, so the next
+   keystroke still filters the complete list instead of the previous result.
+
+When the dataset grows past what fits in memory, this design has to change: paginate on
+the server and go back to `GET /api/products/search?q=` (which is exactly why that
+endpoint still exists).
+
+### 12.5 Why Tailwind instead of a CSS file
+
+The previous version had `src/styles/main.css` with hand-written selectors
+(`.card h2`, `td.actions button`, …). Tailwind replaces it because:
+
+- The design lives **next to the markup** it styles, so a class and the element it
+  affects are never in two different files.
+- Deleting a card deletes its styles, so dead CSS cannot accumulate.
+- Responsive behaviour (`sm:`, `lg:`) is a prefix, not a second file with media queries.
+
+The trade-off is a long `class` attribute. That is why the card's class list and the
+message colour variants are kept in constants at the top of `ui/productGrid.js`.
+
+---
+
+## 13. Deploying on AWS EC2 (1 GB instance)
+
+The project also has to run on a `t3.micro`: **1 GB of RAM** shared by the operating
+system, PostgreSQL and the JVM. That constraint produced two independent failures, and
+this section documents both.
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| The frontend loads but every request fails | `http://localhost:8080` hardcoded in `api/products.js` | Build the URL from `window.location.hostname` |
+| The browser blocks the response | CORS only allowed `localhost` | Configurable `APP_CORS_ALLOWED_ORIGINS` + `allowedOriginPatterns` |
+| The API container dies seconds after starting | The JVM requested more RAM than the instance has (**OOM**) | `-Xmx384m -Xms128m` |
+| The API cannot reach the database | `SPRING_DATASOURCE_URL` pointed to `localhost` | Use the service name: `products-db` |
+
+### 13.1 The API URL is built at runtime
+
+```js
+// frontend/src/api/products.js
+const API_PORT = 8080;
+const API_BASE_URL = `${window.location.protocol}//${window.location.hostname}:${API_PORT}/api/products`;
+```
+
+`localhost` does not mean "my computer": it means **the machine where the browser is
+running**. On the EC2 instance that is the server itself, never the developer's laptop.
+`window.location.hostname` is resolved by the browser at runtime, so one file works
+everywhere without a rebuild:
+
+| Page opened at | Base URL produced |
+|---|---|
+| `http://localhost:5500` | `http://localhost:8080/api/products` |
+| `http://127.0.0.1:5500` | `http://127.0.0.1:8080/api/products` |
+| `http://54.12.34.56:5500` | `http://54.12.34.56:8080/api/products` |
+
+Reusing `window.location.protocol` also avoids mixed content if the page is ever served
+over HTTPS. The limitation is that the API must live on the same host as the frontend;
+if it ever moves to another domain, the URL has to come from configuration or from a
+reverse proxy instead.
+
+### 13.2 JVM memory: `-Xmx` / `-Xms` instead of `-XX:MaxRAMPercentage`
+
+The old entrypoint used `-XX:MaxRAMPercentage=75.0`. That flag sizes the heap from the
+memory **available to the container**, and when no `mem_limit` is declared it reads the
+**host** RAM: 75 % of 1 GB = a **768 MB heap**. Add metaspace, JIT code cache and thread
+stacks (~170 MB) plus PostgreSQL and the kernel, and the OOM killer terminates the
+process. Docker reports it as `Exited (137)` because `137 = 128 + 9` (`SIGKILL`).
+
+```dockerfile
+ENV JAVA_OPTS="-Xms128m -Xmx384m"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-Xms128m` | Initial heap. The JVM starts small and does not grow incrementally under the first requests. |
+| `-Xmx384m` | Hard ceiling for the heap. It can never ask the kernel for more than that. |
+
+The budget for a 1 GB instance:
+
+```text
+1024 MB  total
+- 200 MB  operating system
+- 120 MB  PostgreSQL (shared_buffers 64 MB + connections)
+- 170 MB  outside the heap (metaspace, JIT, threads, GC)
+= 534 MB  available for the heap
+- 384 MB  -Xmx  ->  ~150 MB of headroom
+```
+
+`-Xmx` caps the **heap only**, not the whole process. Self-imposed limits are also worth
+knowing: `mem_limit` in Compose caps the whole container through cgroups, and
+`-XX:+ExitOnOutOfMemoryError` makes the JVM exit so `restart: unless-stopped` brings it
+back instead of leaving a broken process alive.
+
+Two extra memory savings were applied: PostgreSQL runs with `shared_buffers=64MB` and
+`max_connections=30`, and Hikari was reduced to 5 connections
+(`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=5`), because every idle connection is a
+PostgreSQL backend process costing RAM on the server side.
+
+### 13.3 Why the JDBC URL uses `products-db` and not `localhost`
+
+Each container has its own loopback interface. `localhost` inside the `api` container
+points to the `api` container itself, where no PostgreSQL is listening. Docker's embedded
+DNS (on `127.0.0.11`) resolves **service names** to the internal IP of their containers:
+
+```yaml
+SPRING_DATASOURCE_URL: jdbc:postgresql://products-db:5432/products_db
+#                                     ^^^^^^^^^^^ service name, not localhost
+```
+
+Verified from inside the container:
+
+```text
+docker exec products-api sh -c "getent hosts products-db"
+172.27.0.2        products-db  products-db
+```
+
+The rule is: **another container → service name; the same container → `localhost`**. That
+is why the healthcheck is correct with `localhost`, because `wget` runs inside the API
+container and calls the API of that same container.
+
+Ports follow the same two-sided logic. `5432` is always the container port; `5433` is the
+host port chosen to avoid clashing with a local PostgreSQL 18 installation. The API always
+uses the internal one.
+
+### 13.4 CORS for an origin that is unknown at build time
+
+Fixing the URL is not enough: `http://<ip>:5500` and `http://<ip>:8080` are different
+origins, so the browser sends a preflight and the API has to allow it. The origin list is
+now overridable from the environment:
+
+```yaml
+APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-*}
+```
+
+`CorsConfig` uses `allowedOriginPatterns` because `allowedOrigins` rejects `"*"` when
+`allowCredentials(true)` is set (it throws at startup). For a public, stateless API that
+does not use cookies, `*` is a deliberate trade-off; in a real system the exact origin is
+pinned instead: `APP_CORS_ALLOWED_ORIGINS="https://my-app.example.com"`.
+
+Verified with a simulated remote origin:
+
+```text
+GET  /api/products  Origin: http://54.12.34.56:5500
+  -> 200, 3 products, Access-Control-Allow-Origin: http://54.12.34.56:5500
+
+OPTIONS /api/products (preflight)
+  -> 200, Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS
+```
+
+### 13.5 Deployment checklist
+
+```text
+1. Security Group inbound:  22 (SSH)  |  8080 (API)  |  5500 (frontend)
+                            do NOT expose 5433: the database only talks over the
+                            internal Docker network
+
+2. Install Docker + Compose on the instance
+
+3. git clone ... && cd productos-api
+   (optional) cp .env.example .env   -> ports and CORS
+
+4. docker compose up -d --build
+   docker compose ps                 -> both services "healthy"
+
+5. Serve the frontend (file:// does not work with ES modules):
+     cd frontend
+     python3 -m http.server 5500 --bind 0.0.0.0
+   --bind 0.0.0.0 is required; 127.0.0.1 would only accept requests from the
+   instance itself
+
+6. curl http://localhost:8080/api/products
+   open  http://<PUBLIC-IP>:5500/index.html  -> 3 product cards
+```
+
+Without an **Elastic IP** the public address changes on every stop/start. The dynamic URL
+survives that automatically, but the address you type in the browser does not.
+
+### 13.6 Measured result
+
+```text
+products-api   Up (healthy)      271 MiB
+products-db    Up (healthy)       38 MiB
+──────────────────────────────────────────
+total                            ~310 MiB of 1024 MiB
+```
+
+```text
+docker exec products-api sh -c "tr '\0' ' ' < /proc/1/cmdline"
+java -Xmx384m -Xms128m -jar /app/app.jar      <-- the flags really applied
+
+mvn test                                      26/26 tests passing
+frontend                                      3 cards, CORS accepted, 0 console errors
+```
+
+---
+
+## 14. Health endpoint, load test and code quality
+
+### 14.1 `GET /health`
+
+```bash
+curl -i http://localhost:8080/health
+```
+
+```http
+HTTP/1.1 200
+Content-Type: application/json;charset=UTF-8
+
+{"status":"UP"}
+```
+
+It lives in `controller/HealthController.java` and answers with the `HealthResponse`
+record. It is intentionally **outside `/api`**: it is not a business resource, and the
+load balancer must not depend on the API prefix.
+
+| Rule | Reason |
+|---|---|
+| No database query | The ALB calls it every 15 s forever. It must cost almost nothing. |
+| No authentication | The load balancer has no user credentials. |
+| No internals in the body | Version numbers or stack traces would leak information to the internet. |
+| Constant answer | Reaching the method already proves Tomcat, Spring MVC and the JVM are alive. |
+
+This is a **liveness** probe. The Docker Compose healthcheck still calls
+`/api/products` on purpose, because that one **does** touch PostgreSQL and therefore acts
+as a *readiness* probe: it verifies that the container can actually serve data.
+
+### 14.2 Load test with k6
+
+`k6-test.js` (project root) runs 50 virtual users for 30 seconds against
+`GET /api/products`, with one second of think time per iteration and three thresholds that
+turn the run into an assertion.
+
+```bash
+k6 run k6-test.js
+
+# against another host (for example the ALB DNS name)
+BASE_URL=http://my-alb-123456.eu-west-1.elb.amazonaws.com k6 run k6-test.js
+```
+
+Measured results on the Docker stack (`products-api` limited to 384 MB of heap):
+
+| Run | avg | med | p(95) | p(99) | iterations | throughput | failed |
+|---|---|---|---|---|---|---|---|
+| 1 (cold JVM) | 117 ms | 27 ms | **529 ms** | 1.26 s | 1332 | 43.3 req/s | 0 % |
+| 2 (warm) | 25.7 ms | 10.3 ms | 124 ms | 187 ms | 1485 | 47.9 req/s | 0 % |
+| 3 (warm) | 18.5 ms | 8.2 ms | 80.9 ms | 140 ms | 1500 | 48.8 req/s | 0 % |
+
+Three lessons that come straight out of this table:
+
+1. **The first run is always slower.** Class loading and JIT compilation happen under
+   load, so p(95) went from 529 ms to 81 ms once the JVM was warm. A load test that
+   reports only the first run is measuring the warm-up, not the API.
+2. **The average hides the tail.** Run 1 had a 27 ms median and a 529 ms p(95): half the
+   requests were instant while the slowest 5 % queued. That is why the threshold uses
+   p(95) and not the average.
+3. **Little's law closes the loop.** 50 VUs × 1.02 s per iteration ≈ 49 iterations/s, which
+   is exactly the 48.8 req/s measured. The system was **not** saturated: the
+   `sleep(1)` think time caps the throughput at 50 req/s. Removing it would show the real
+   ceiling of the 5-connection Hikari pool.
+
+The p(95) threshold is 750 ms, not 500 ms, for a reason: on a 1 GB instance the cold run
+measures 529 ms, so a 500 ms SLO would be a false alarm. The number has to describe the
+capacity the hardware actually has.
+
+### 14.3 ESLint, Prettier and the build chain
+
+| File | Role |
+|---|---|
+| `.eslintrc.json` | ESLint 8 (legacy config): `eslint:recommended` + `eqeqeq`, `no-var`, `prefer-const`, `no-unused-vars`. Applies to `frontend/src/**/*.js` and `k6-test.js`. |
+| `.prettierrc` | Prettier 3: 4-space indent, single quotes, 110 columns, semicolons. |
+| `package.json` | Dev-only scripts and the two devDependencies. The app still has **no build step**. |
+
+```bash
+npm install
+npm run lint          # static analysis
+npm run lint:fix      # fix what can be fixed automatically
+npm run format        # rewrite the files with Prettier
+npm run format:check  # fail if a file is not formatted (used by CI)
+```
+
+ESLint found a real problem during the adoption: `ui/pokeGrid.js` imported `formatLabel`
+without ever using it. That is exactly the class of bug a linter catches and a formatter
+does not — Prettier would have "fixed" the formatting of the dead import and left it there.
+
+The GitHub Actions pipeline now has three jobs: `test` (Maven), `lint` (npm) and
+`package` (`needs: [test, lint]`). A pull request that breaks the style or leaves an
+unused variable cannot produce an artifact.
+
+### 14.4 How the ALB is wired to the health endpoint
+
+```text
+  user ──►  ALB (public subnets, :80/:443)  ──►  target group products-tg
+                    │                               health check: GET /health : 8080
+                    └── only healthy targets ──►    instance i-0abc (api container :8080)
+```
+
+```bash
+aws elbv2 create-target-group \
+  --name products-tg \
+  --protocol HTTP --port 8080 \
+  --target-type instance \
+  --vpc-id vpc-xxxxxxxx \
+  --health-check-path /health \
+  --health-check-interval-seconds 15 \
+  --health-check-timeout-seconds 5 \
+  --healthy-threshold-count 2 \
+  --unhealthy-threshold-count 3 \
+  --matcher HttpCode=200
+```
+
+- The ALB is **layer 7**: it reads the HTTP request and can route by path or host, not
+  just by IP and port.
+- The users only see the ALB DNS name; the instance keeps its port 8080 open **only to
+  the ALB security group**, never to the internet.
+- Two failed checks in a row (2 × 15 s) are enough to remove an instance from rotation,
+  and it comes back only after two consecutive successes.
+
+---
+
+## 15. Next steps: React and Electron
+
+The current frontend is deliberately framework-free. React and Electron are the next two
+steps of the course, and the guide covers the theory in Spanish; the mapping is short:
+
+| Vanilla JS (today) | React (next) |
+|---|---|
+| `buildCard()` returns an HTML string, `innerHTML` parses it | A functional component returns **JSX**, React updates the DOM |
+| State lives in module variables (`results`, `listeners`) | `useState` holds it, and changing it re-renders |
+| Manual re-render after every change | The Virtual DOM diffs old vs new and patches only what changed |
+| `document.getElementById` + delegation | Refs and synthetic events declared in JSX |
+
+Electron wraps the same renderer in a desktop shell: a **main process** (Node.js, owns the
+window and the OS) plus one **renderer process** per window (Chromium, runs the web app),
+with a `preload` bridge for IPC. `electron-builder` turns it into an `.exe`. The Spring
+Boot API stays where it is: the desktop app calls the same REST endpoints.
