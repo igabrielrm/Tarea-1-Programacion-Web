@@ -1,0 +1,27 @@
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "globals": {
+    "__ENV": "readonly"
+  },
+  "extends": ["eslint:recommended"],
+  "ignorePatterns": ["node_modules/", "target/"],
+  "rules": {
+    "eqeqeq": ["error", "always"],
+    "no-var": "error",
+    "prefer-const": "error",
+    "no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "no-empty": ["error", { "allowEmptyCatch": true }],
+    "no-console": "off"
+  }
+}

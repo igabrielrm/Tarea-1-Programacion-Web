@@ -1,0 +1,16 @@
+{
+  "name": "products-api-frontend-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static analysis (ESLint) and formatting (Prettier) for the Vanilla JS frontend and the k6 load test. The application itself has no build step: this package.json only exists for developer tooling.",
+  "scripts": {
+    "lint": "eslint \"frontend/src/**/*.js\" k6-test.js",
+    "lint:fix": "eslint \"frontend/src/**/*.js\" k6-test.js --fix",
+    "format": "prettier --write \"frontend/**/*.{js,html}\" \"*.js\"",
+    "format:check": "prettier --check \"frontend/**/*.{js,html}\" \"*.js\""
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "prettier": "^3.4.2"
+  }
+}

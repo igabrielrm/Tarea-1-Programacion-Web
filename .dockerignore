@@ -33,3 +33,11 @@ http/
 *.log
 logs/
 .env
+
+# Node tooling (ESLint / Prettier) and the load test: developer machines only.
+node_modules/
+package.json
+package-lock.json
+.eslintrc.json
+.prettierrc
+k6-test.js
