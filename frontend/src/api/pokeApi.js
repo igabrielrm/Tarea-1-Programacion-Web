@@ -34,9 +34,8 @@ const REQUEST_TIMEOUT_MS = 12000;
 async function request(url) {
     // AbortSignal.timeout() makes fetch reject by itself when the timer expires.
     // The optional chaining keeps the code working on browsers without that API.
-    const signal = typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-        : undefined;
+    const signal =
+        typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
 
     let response;
     try {
@@ -82,8 +81,8 @@ export function normalizePokemonName(value) {
     return String(value ?? '')
         .trim()
         .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, '-')  // spaces, dots and accents become a hyphen
-        .replace(/^-+|-+$/g, '');      // no leading or trailing hyphens
+        .replace(/[^a-z0-9-]+/g, '-') // spaces, dots and accents become a hyphen
+        .replace(/^-+|-+$/g, ''); // no leading or trailing hyphens
 }
 
 /**
@@ -96,7 +95,9 @@ export function normalizePokemonName(value) {
  * @returns {number|null} the id, or null when the URL has no number.
  */
 export function extractIdFromUrl(url) {
-    const pieces = String(url ?? '').split('/').filter(Boolean);
+    const pieces = String(url ?? '')
+        .split('/')
+        .filter(Boolean);
     const lastPiece = pieces.at(-1);
     const id = Number(lastPiece);
     return Number.isInteger(id) && id > 0 ? id : null;

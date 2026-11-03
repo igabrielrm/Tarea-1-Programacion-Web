@@ -50,11 +50,11 @@ const priceInput = document.getElementById('price');
 /**
  * Currency formatter. It is built ONCE, outside the render loop, because creating an
  * Intl.NumberFormat is expensive and the filter re-renders on every keystroke.
- * en-US + EUR prints the symbol first and always with two decimals: €1,299.90
+ * en-US + USD prints the symbol first and always with two decimals: $1,299.90
  */
 const priceFormatter = new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'EUR',
+    currency: 'USD',
     minimumFractionDigits: 2
 });
 
@@ -78,10 +78,10 @@ function escapeHtml(value) {
 }
 
 /**
- * Formats a price coming from the API (a JSON number) as a euro string.
+ * Formats a price coming from the API (a JSON number) as a US dollar string.
  *
  * @param {number} value - the price.
- * @returns {string} something like "€1,299.90", or "—" if the value is not a number.
+ * @returns {string} something like "$1,299.90", or "—" if the value is not a number.
  */
 function formatPrice(value) {
     const amount = Number(value);

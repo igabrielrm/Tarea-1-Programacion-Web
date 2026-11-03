@@ -7,7 +7,7 @@
  *  bindEvents(), so this file never decides what to do with a product or a Pokémon.
  * ===================================================================================== */
 
-import { escapeHtml, formatLabel, setHidden } from './domUtils.js';
+import { escapeHtml, setHidden } from './domUtils.js';
 import { buildTypeBadges, formatDexNumber } from './pokemonMarkup.js';
 
 // -------------------------------------------------------------------------------------
@@ -52,9 +52,8 @@ function buildCard(entry, index) {
 
     // The official artwork looks better than the tiny game sprite, but it is not present
     // for every Pokémon, so we fall back to the front sprite.
-    const sprite = pokemon.sprites?.other?.['official-artwork']?.front_default
-        ?? pokemon.sprites?.front_default
-        ?? '';
+    const sprite =
+        pokemon.sprites?.other?.['official-artwork']?.front_default ?? pokemon.sprites?.front_default ?? '';
 
     const card = document.createElement('article');
     card.className = CARD_CLASSES;

@@ -109,7 +109,7 @@ export function createProduct(product) {
             'Content-Type': 'application/json', // We tell the backend the body is JSON
             Accept: 'application/json'
         },
-        body: JSON.stringify(product)           // We convert the JS object into a JSON string
+        body: JSON.stringify(product) // We convert the JS object into a JSON string
     });
 }
 

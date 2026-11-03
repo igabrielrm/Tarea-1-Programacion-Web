@@ -8,13 +8,7 @@
  *  Loaded by index.html with:  <script type="module" src="src/main.js"></script>
  * ===================================================================================== */
 
-import {
-    getProducts,
-    getProduct,
-    createProduct,
-    updateProduct,
-    deleteProduct
-} from './api/products.js';
+import { getProducts, getProduct, createProduct, updateProduct, deleteProduct } from './api/products.js';
 
 import * as ui from './ui/productGrid.js';
 
@@ -69,7 +63,9 @@ function filterProducts(products, term) {
 
     // includes() is a case-insensitive "contains" because both sides were lowercased.
     return products.filter((product) =>
-        String(product.name ?? '').toLowerCase().includes(needle)
+        String(product.name ?? '')
+            .toLowerCase()
+            .includes(needle)
     );
 }
 

@@ -81,9 +81,10 @@ function buildStats(stats) {
  */
 function buildEvolutionChip(evolution, currentId) {
     // The Pokémon being viewed is highlighted so the user can locate it in the chain.
-    const highlight = evolution.id === currentId
-        ? 'border-indigo-300 bg-indigo-50 ring-2 ring-indigo-200'
-        : 'border-slate-200 bg-white';
+    const highlight =
+        evolution.id === currentId
+            ? 'border-indigo-300 bg-indigo-50 ring-2 ring-indigo-200'
+            : 'border-slate-200 bg-white';
 
     const sprite = evolution.sprite
         ? `<img src="${escapeHtml(evolution.sprite)}" alt="${escapeHtml(evolution.name)}"
@@ -151,27 +152,28 @@ function buildModalContent(entry) {
     const { pokemon, species, evolutions, genus, flavorText } = entry;
 
     // Official artwork when available, front sprite otherwise.
-    const artwork = pokemon.sprites?.other?.['official-artwork']?.front_default
-        ?? pokemon.sprites?.front_default
-        ?? '';
+    const artwork =
+        pokemon.sprites?.other?.['official-artwork']?.front_default ?? pokemon.sprites?.front_default ?? '';
 
     // PokéAPI stores height in decimetres and weight in hectograms, so both are divided by 10.
     const heightInMetres = (pokemon.height / 10).toFixed(1);
     const weightInKilograms = (pokemon.weight / 10).toFixed(1);
 
     const abilities = (pokemon.abilities ?? [])
-        .map(({ ability, is_hidden: isHidden }) => `
+        .map(
+            ({ ability, is_hidden: isHidden }) => `
             <span class="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                 ${escapeHtml(formatLabel(ability.name))}${isHidden ? ' <span class="text-slate-400">(hidden)</span>' : ''}
             </span>
-        `)
+        `
+        )
         .join('');
 
     const legendaryBadge = species.is_legendary
         ? '<span class="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">Legendary</span>'
         : species.is_mythical
-            ? '<span class="rounded-full bg-fuchsia-100 px-2.5 py-0.5 text-xs font-semibold text-fuchsia-800">Mythical</span>'
-            : '';
+          ? '<span class="rounded-full bg-fuchsia-100 px-2.5 py-0.5 text-xs font-semibold text-fuchsia-800">Mythical</span>'
+          : '';
 
     return `
         <!-- ============ HEADER ============ -->
